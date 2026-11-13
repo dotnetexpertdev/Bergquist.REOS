@@ -13,6 +13,9 @@ const STATUS_LABELS: Record<DocumentStatus, string> = {
   recorded: 'Recorded (Unpaid Bill)',
   linked_existing: 'Linked Existing Bill',
   remote_outcome_unknown: 'QuickBooks Outcome Unknown',
+  filed: 'Filed (No Accounting)',
+  possible_copy: 'Possible Copy',
+  linked_copy: 'Copy of Stored Bill',
 };
 
 interface StatusBadgeProps {

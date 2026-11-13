@@ -23,11 +23,19 @@ export class ApiError extends Error {
   }
 }
 
+// The server compares the header with the csrf_token cookie. The cookie is shared by every
+// tab and may have been renewed by another one, so the cookie's current value wins.
+function currentCsrfToken(): string | null {
+  const match = typeof document !== 'undefined' ? document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) : null;
+  return match ? decodeURIComponent(match[1]) : csrfToken;
+}
+
 async function request(url: string, options: RequestInit = {}): Promise<Response> {
   const headers = new Headers(options.headers);
   const method = (options.method || 'GET').toUpperCase();
-  if (csrfToken && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
-    headers.set('X-CSRF-Token', csrfToken);
+  const token = currentCsrfToken();
+  if (token && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    headers.set('X-CSRF-Token', token);
   }
   return fetch(url, { ...options, headers, credentials: 'include' });
 }
@@ -81,6 +89,7 @@ export const getDocumentHistory = (id: string) => json<HistoryEntry[]>(`/api/doc
 
 export interface DocumentUpdate {
   revision: number;
+  reviewed_document_type?: string;
   reviewed_vendor_name?: string;
   reviewed_invoice_number?: string;
   reviewed_invoice_date?: string;
@@ -108,6 +117,10 @@ export async function uploadDocument(file: File, attemptId: string) {
     success: boolean; document_id?: string; message?: string; is_duplicate?: boolean; retried_attempt?: boolean;
   }>;
 }
+
+export const resolveCopy = (id: string, revision: number, resolution: 'same' | 'different') =>
+  post<{ success: boolean; revision: number; status: string }>(`/api/documents/${id}/resolve-copy`,
+    { revision, resolution });
 
 export const retryExtraction = (id: string) => post<{ success: boolean }>(`/api/documents/${id}/retry-extraction`);
 

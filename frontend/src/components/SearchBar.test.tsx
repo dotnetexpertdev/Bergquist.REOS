@@ -207,4 +207,22 @@ describe('Spoken corrections', () => {
     expect(screen.queryByRole('region', { name: 'Proposed change' })).not.toBeInTheDocument();
     expect(screen.getByText('Change cancelled. The bill was not modified.')).toBeInTheDocument();
   });
+
+  it('sends every field a proposal carries (vendor name plus QuickBooks vendor)', async () => {
+    const user = userEvent.setup();
+    m.search.mockResolvedValue(answer({
+      intent: 'correction', answer: 'Proposed change. Nothing changes until you confirm.',
+      proposed_edit: { document_id: 'd9', revision: 3, field: 'vendor_name', field_label: 'Vendor',
+        update_key: 'reviewed_vendor_name', current_value: 'City Water', proposed_value: 'City Water Dept',
+        proposed_raw: 'City Water Dept', updates: { reviewed_vendor_name: 'City Water Dept', qb_vendor_id: '57' } },
+    }));
+    m.updateDocument.mockResolvedValue({ success: true, revision: 4, status: 'ready_for_approval' });
+    renderBar();
+    await user.type(screen.getByLabelText('Question'), 'change the vendor to City Water Dept');
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    const panel = await screen.findByRole('region', { name: 'Proposed change' });
+    await user.click(within(panel).getByRole('button', { name: 'Confirm change' }));
+    expect(m.updateDocument).toHaveBeenCalledWith('d9', {
+      revision: 3, reviewed_vendor_name: 'City Water Dept', qb_vendor_id: '57', source: 'typed' });
+  });
 });

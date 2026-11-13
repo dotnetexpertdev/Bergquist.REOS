@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_session
 from ..auth import (
     verify_owner_credentials, set_session_cookie, clear_session_cookie,
-    get_session_username, generate_csrf_token, set_csrf_cookie, require_auth
+    get_session_username, generate_csrf_token, set_csrf_cookie, require_auth, CSRF_COOKIE_NAME
 )
 from ..schemas import LoginRequest, LoginResponse, SessionResponse
 
@@ -48,10 +48,12 @@ async def get_session(request: Request, response: Response):
     """Get current session status."""
     username = get_session_username(request)
 
-    # Generate new CSRF token if authenticated
+    # Keep the existing CSRF token: the cookie is shared by every tab, so replacing it here
+    # would break requests from tabs that are already open ("Invalid CSRF token").
     csrf_token = None
     if username:
-        csrf_token = generate_csrf_token()
+        existing = request.cookies.get(CSRF_COOKIE_NAME)
+        csrf_token = existing if existing and len(existing) >= 32 else generate_csrf_token()
         set_csrf_cookie(response, csrf_token)
 
     return SessionResponse(

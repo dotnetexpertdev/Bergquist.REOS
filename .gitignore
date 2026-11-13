@@ -52,6 +52,12 @@ coverage.xml
 *.sqlite
 *.sqlite3
 backend/data/temp/
+# Stored original bills and raw emails (private; back up with the database instead)
+backend/data/documents/
+backend/data/emails/
+data/
+# Local backups of backend/data (contain private bills)
+backup-*.zip
 
 # ===========================
 # Node / React (frontend)

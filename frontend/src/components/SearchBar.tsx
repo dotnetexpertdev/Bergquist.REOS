@@ -163,8 +163,10 @@ export default function SearchBar({ onClose }: SearchBarProps) {
     if (!edit) return;
     setSaving(true);
     try {
+      const updates = edit.updates && Object.keys(edit.updates).length
+        ? edit.updates : { [edit.update_key]: edit.proposed_raw };
       await updateDocument(edit.document_id, {
-        revision: edit.revision, [edit.update_key]: edit.proposed_raw as string,
+        revision: edit.revision, ...(updates as Record<string, string>),
         source: fromVoice ? 'voice' : 'typed',
       });
       setResult({ ...result!, proposed_edit: null });

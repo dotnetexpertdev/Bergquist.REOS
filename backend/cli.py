@@ -120,6 +120,68 @@ async def create_property(name: str, address: str = None) -> None:
         print(f"Created property: {prop.id} - {prop.name}")
 
 
+# Rows that belong to stored documents, children first (foreign keys are enforced).
+DOCUMENT_TABLES = ("duplicate_candidates", "accounting_claims", "operations", "audit_events", "arrivals", "documents")
+
+
+def reset_documents(assume_yes: bool = False, backup: bool = True) -> None:
+    """Delete every stored document, its files and history; keep connections, properties and mappings.
+
+    Nothing in QuickBooks or Todoist is touched: bills and tasks created earlier stay there.
+    """
+    import shutil
+    import sqlite3
+    from datetime import datetime
+
+    db_path = settings.database_path
+    if not db_path.exists():
+        print(f"No database at {db_path}; nothing to clean.")
+        return
+    con = sqlite3.connect(str(db_path), timeout=5)
+    try:
+        counts = {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in DOCUMENT_TABLES}
+    finally:
+        con.close()
+    folders = [settings.documents_path, settings.emails_path, settings.temp_path]
+    files = sum(1 for f in folders if f.exists() for x in f.rglob("*") if x.is_file())
+
+    print("This deletes:")
+    print(f"  {counts['documents']} documents, {counts['arrivals']} arrivals, {counts['audit_events']} history events,")
+    print(f"  {counts['operations']} accounting operations, {counts['accounting_claims']} invoice claims, "
+          f"{counts['duplicate_candidates']} duplicate suggestions, and {files} stored files.")
+    print("It keeps: QuickBooks/Gmail connections, properties, vendor/account mappings.")
+    print("QuickBooks bills and Todoist tasks already created are NOT removed.")
+    print("Stop the server before running this.")
+    if not assume_yes and input("Type DELETE to continue: ").strip() != "DELETE":
+        print("Cancelled; nothing was changed.")
+        return
+
+    if backup:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        archive = shutil.make_archive(str(settings.data_path.parent / f"backup-{stamp}"), "zip",
+                                      root_dir=str(settings.data_path))
+        print(f"Backup: {archive}")
+
+    con = sqlite3.connect(str(db_path), timeout=5)
+    try:
+        con.execute("PRAGMA foreign_keys=ON")
+        with con:
+            con.execute("UPDATE documents SET copy_of_document_id = NULL")
+            for table in DOCUMENT_TABLES:
+                con.execute(f"DELETE FROM {table}")
+        con.execute("VACUUM")
+    except sqlite3.OperationalError as exc:
+        print(f"Error: {exc}. Is the server still running? Stop it and try again.", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        con.close()
+    for folder in folders:
+        if folder.exists():
+            for child in folder.iterdir():
+                shutil.rmtree(child) if child.is_dir() else child.unlink()
+    print("Done. All documents were removed; start the server and upload again.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Morning Assistant CLI")
     subparsers = parser.add_subparsers(dest="command", help="Commands")
@@ -139,6 +201,11 @@ def main() -> None:
     serve_parser.add_argument("--ssl-certfile", help="TLS certificate (e.g. from mkcert) for HTTPS")
     serve_parser.add_argument("--ssl-keyfile", help="TLS private key")
 
+    reset_parser = subparsers.add_parser(
+        "reset-documents", help="Delete all stored bills/receipts and their history (keeps connections)")
+    reset_parser.add_argument("--yes", action="store_true", help="Do not ask for confirmation")
+    reset_parser.add_argument("--no-backup", action="store_true", help="Skip the automatic backup zip")
+
     property_parser = subparsers.add_parser("create-property", help="Create a property")
     property_parser.add_argument("name", help="Property name")
     property_parser.add_argument("--address", help="Property address")
@@ -155,6 +222,8 @@ def main() -> None:
         migrate()
     elif args.command == "serve":
         serve(args.host, args.port, args.reload, args.ssl_certfile, args.ssl_keyfile)
+    elif args.command == "reset-documents":
+        reset_documents(args.yes, backup=not args.no_backup)
     elif args.command == "create-property":
         asyncio.run(create_property(args.name, args.address))
     else:

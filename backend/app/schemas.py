@@ -51,6 +51,9 @@ class DocumentStatus(str, Enum):
     RECORDED = "recorded"
     LINKED_EXISTING = "linked_existing"
     REMOTE_OUTCOME_UNKNOWN = "remote_outcome_unknown"
+    FILED = "filed"
+    POSSIBLE_COPY = "possible_copy"
+    LINKED_COPY = "linked_copy"
 
 
 class ArrivalMethod(str, Enum):
@@ -95,6 +98,8 @@ class DocumentListItem(BaseModel):
     total: Optional[Decimal] = None
     currency: Optional[str] = None
     document_type: Optional[str] = None
+    document_category: str = "bill"
+    copy_of_document_id: Optional[str] = None
 
     # Property
     property_id: Optional[str] = None
@@ -139,6 +144,14 @@ class DocumentDetail(BaseModel):
     extracted_service_address: Optional[str] = None
     extraction_uncertain_fields: List[str] = []
     extraction_source_text: Optional[str] = None
+
+    # Classification
+    reviewed_document_type: Optional[str] = None
+    document_category: str = "bill"
+    document_categories: Dict[str, str] = {}
+
+    # Same invoice in another stored file
+    copy_of: Optional[Dict[str, Any]] = None
 
     # Reviewed values
     reviewed_vendor_name: Optional[str] = None
@@ -203,6 +216,7 @@ class DocumentUpdateRequest(BaseModel):
     revision: int  # Must match current revision
 
     # Reviewed values (any can be updated)
+    reviewed_document_type: Optional[str] = None
     reviewed_vendor_name: Optional[str] = None
     reviewed_invoice_number: Optional[str] = None
     reviewed_invoice_date: Optional[date] = None
@@ -218,6 +232,12 @@ class DocumentUpdateRequest(BaseModel):
 
     # "typed" or "voice" (recorded in the audit history)
     source: Optional[str] = Field(default="typed", pattern="^(typed|voice)$")
+
+
+class ResolveCopyRequest(BaseModel):
+    """Owner decision on a suspected copy of another stored document."""
+    revision: int
+    resolution: str = Field(pattern="^(same|different)$")
 
 
 class DocumentUpdateResponse(BaseModel):
@@ -410,6 +430,7 @@ class SearchResultDocument(BaseModel):
     qb_bill_doc_number: Optional[str] = None
     invoice_date: Optional[date] = None
     arrival_count: int = 0
+    document_category: Optional[str] = None
     links: Dict[str, Optional[str]] = {}
 
 
@@ -435,6 +456,8 @@ class ProposedEdit(BaseModel):
     current_value: Optional[str] = None
     proposed_value: str
     proposed_raw: Any = None
+    # Every field the confirmation will send (e.g. vendor name plus its QuickBooks vendor)
+    updates: Dict[str, Any] = {}
 
 
 class SearchResponse(BaseModel):

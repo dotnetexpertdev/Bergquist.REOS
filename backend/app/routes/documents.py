@@ -16,12 +16,13 @@ from ..config import settings
 from ..database import get_session
 from ..models import Arrival, ArrivalMethod, AuditEvent, Document, DocumentStatus as DBDocumentStatus, EventType
 from ..schemas import (
-    DocumentDetail, DocumentListItem, DocumentUpdateRequest, DocumentUpdateResponse, HistoryEntry, UploadResponse,
+    DocumentDetail, DocumentListItem, DocumentUpdateRequest, DocumentUpdateResponse, HistoryEntry, ResolveCopyRequest,
+    UploadResponse,
 )
 from ..services.documents import (
     UpdateError, get_available_actions, get_document_detail, get_document_history, get_document_list,
     get_documents_needing_review, get_documents_ready_for_approval, get_pending_question, missing_fields,
-    update_document,
+    resolve_copy, update_document,
 )
 from ..services.history import describe
 from ..services.intake import ALLOWED_EXTENSIONS, cleanup_temp_file, ingest_document, validate_upload
@@ -112,6 +113,24 @@ async def update_document_route(document_id: str, update: DocumentUpdateRequest,
         await db.rollback()
         raise HTTPException(status_code=e.status_code,
                             detail={"message": e.message, "field_errors": e.field_errors} if e.field_errors else e.message)
+    await db.commit()
+    return DocumentUpdateResponse(
+        success=True, revision=doc.revision, status=doc.status.value,
+        available_actions=get_available_actions(doc), pending_question=get_pending_question(doc),
+        missing_fields=missing_fields(doc),
+    )
+
+
+@router.post("/{document_id}/resolve-copy", response_model=DocumentUpdateResponse)
+async def resolve_copy_route(document_id: str, request: ResolveCopyRequest,
+                             username: str = Depends(require_auth), db: AsyncSession = Depends(get_session),
+                             _csrf: None = Depends(require_csrf)):
+    """Answer "is this the same invoice as the stored one?". Never posts to QuickBooks."""
+    try:
+        doc = await resolve_copy(db, document_id, request.revision, request.resolution, username)
+    except UpdateError as e:
+        await db.rollback()
+        raise HTTPException(status_code=e.status_code, detail=e.message)
     await db.commit()
     return DocumentUpdateResponse(
         success=True, revision=doc.revision, status=doc.status.value,

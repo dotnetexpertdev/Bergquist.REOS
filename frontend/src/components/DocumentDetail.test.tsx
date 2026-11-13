@@ -9,6 +9,7 @@ vi.mock('../api', () => ({
   getDocument: vi.fn(), getDocumentHistory: vi.fn(), getDuplicateCandidates: vi.fn(), getProperties: vi.fn(),
   getQBReferenceData: vi.fn(), updateDocument: vi.fn(), approveDocument: vi.fn(), checkDuplicates: vi.fn(),
   resolveDuplicate: vi.fn(), reconcileDocument: vi.fn(), retryAttachment: vi.fn(), retryExtraction: vi.fn(),
+  resolveCopy: vi.fn(),
 }));
 
 import * as api from '../api';
@@ -177,5 +178,62 @@ describe('DocumentDetail duplicate matches and recovery', () => {
     await user.click(await screen.findByRole('button', { name: 'Retry attachment' }));
     expect(m.retryAttachment).toHaveBeenCalledWith('d1');
     expect(await screen.findByRole('alert')).toHaveTextContent('attachments could not be checked');
+  });
+});
+
+describe('DocumentDetail classification and copies', () => {
+  it('asks whether a possible copy is the same invoice and links it', async () => {
+    const user = userEvent.setup();
+    m.resolveCopy.mockResolvedValue({ success: true, revision: 8, status: 'linked_copy' });
+    renderAt(makeDoc({
+      status: 'possible_copy', available_actions: ['view_original', 'update_fields', 'resolve_copy'],
+      copy_of: { id: 'd0', title: 'Metro Power & Light invoice MPL-2026-0415', status: 'recorded', total: '142.50',
+        currency: 'USD', invoice_date: '2026-10-15', qb_bill_id: '101', qb_bill_doc_number: 'MPL-2026-0415',
+        confirmed: false },
+    }));
+    const panel = await screen.findByRole('region', { name: 'Copy of a stored bill' });
+    expect(within(panel).getByRole('link', { name: 'Metro Power & Light invoice MPL-2026-0415' }))
+      .toHaveAttribute('href', '/documents/d0');
+    expect(screen.queryByRole('button', { name: 'Review and approve' })).not.toBeInTheDocument();
+    await user.click(within(panel).getByRole('button', { name: 'Same invoice: link as copy' }));
+    expect(m.resolveCopy).toHaveBeenCalledWith('d1', 7, 'same');
+    expect(await screen.findByText('Linked as a copy. No second bill will be created.')).toBeInTheDocument();
+  });
+
+  it('keeps it separate when the owner says it is a different invoice', async () => {
+    const user = userEvent.setup();
+    m.resolveCopy.mockResolvedValue({ success: true, revision: 8, status: 'ready_for_approval' });
+    renderAt(makeDoc({
+      status: 'possible_copy', available_actions: ['view_original', 'update_fields', 'resolve_copy'],
+      copy_of: { id: 'd0', title: 'Metro Power & Light', status: 'needs_review', confirmed: false },
+    }));
+    const panel = await screen.findByRole('region', { name: 'Copy of a stored bill' });
+    await user.click(within(panel).getByRole('button', { name: 'Different invoice' }));
+    expect(m.resolveCopy).toHaveBeenCalledWith('d1', 7, 'different');
+  });
+
+  it('shows a filed document without accounting actions and lets the owner reclassify it', async () => {
+    const user = userEvent.setup();
+    m.updateDocument.mockResolvedValue({ success: true, revision: 8, status: 'needs_review' });
+    renderAt(makeDoc({
+      status: 'filed', document_category: 'receipt', extracted_document_type: 'receipt',
+      available_actions: ['view_original', 'view_history', 'update_fields'],
+    }));
+    expect(await screen.findByRole('heading', { name: 'Document details' })).toBeInTheDocument();
+    expect(screen.getByText(/It is not a bill, so nothing/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review and approve' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Edit details' }));
+    await user.selectOptions(screen.getByLabelText('Document type'), 'bill');
+    await user.click(screen.getByRole('button', { name: 'Save correction' }));
+    expect(m.updateDocument).toHaveBeenCalledWith('d1', expect.objectContaining({ revision: 7, reviewed_document_type: 'bill' }));
+  });
+
+  it('does not send the document type when it is unchanged', async () => {
+    const user = userEvent.setup();
+    m.updateDocument.mockResolvedValue({ success: true, revision: 8, status: 'ready_for_approval' });
+    renderAt(makeDoc({ document_category: 'bill' }));
+    await user.click(await screen.findByRole('button', { name: 'Edit details' }));
+    await user.click(screen.getByRole('button', { name: 'Save correction' }));
+    expect(m.updateDocument.mock.calls[0][1].reviewed_document_type).toBeUndefined();
   });
 });

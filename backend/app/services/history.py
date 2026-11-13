@@ -106,6 +106,21 @@ def describe(event: AuditEvent, doc: Optional[Document] = None) -> Dict[str, Any
         text = f"App restarted during {str(d.get('operation_type', '')).replace('_', ' ')}; marked for safe resume"
     elif t == EventType.QB_DISCREPANCY_FLAGGED:
         text = f"Local correction differs from QuickBooks bill {d.get('qb_bill_id')}: {', '.join(d.get('fields', []))}"
+    elif t == EventType.COPY_SUSPECTED:
+        text = (f"Looks like a copy of {d.get('original_title') or 'a stored bill'} (same invoice, different file); "
+                "waiting for your decision")
+        if d.get("original_id"):
+            links.append({"label": "Stored bill", "href": f"/documents/{d['original_id']}"})
+    elif t == EventType.COPY_LINKED:
+        if d.get("copy_id"):
+            text = f"Another file of this bill was linked as a copy ({d.get('copy_filename') or 'file'})"
+            links.append({"label": "Copy", "href": f"/documents/{d['copy_id']}"})
+        else:
+            text = f"Confirmed as a copy of {d.get('original_title') or 'a stored bill'}; no separate accounting"
+            if d.get("original_id"):
+                links.append({"label": "Stored bill", "href": f"/documents/{d['original_id']}"})
+    elif t == EventType.COPY_DISMISSED:
+        text = f"Not a copy of {d.get('original_title') or 'the stored bill'}: kept as a separate bill"
     elif t == EventType.APPROVAL_RELEASED:
         text = f"Approval released: {d.get('reason')}"
     elif t in (EventType.TASK_CREATED, EventType.TASK_UPDATED, EventType.TASK_CREATION_FAILED):

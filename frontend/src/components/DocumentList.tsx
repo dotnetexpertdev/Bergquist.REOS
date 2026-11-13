@@ -6,6 +6,11 @@ import StatusBadge from './StatusBadge';
 
 type FilterTab = 'all' | 'needs_review' | 'ready';
 
+const CATEGORY_LABELS: Record<string, string> = {
+  bill: 'Bill', receipt: 'Receipt', bank_statement: 'Bank statement', lease: 'Lease', tax_notice: 'Tax notice',
+  insurance: 'Insurance', other: 'Other document',
+};
+
 function newAttemptId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
   return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) =>
@@ -178,6 +183,9 @@ export default function DocumentList() {
                 <div style={{ flex: 1, minWidth: '200px' }}>
                   <div className="doc-title">{doc.vendor_name || doc.first_arrival_filename || 'Unknown vendor'}</div>
                   <div className="muted small">
+                    {doc.document_category && doc.document_category !== 'bill' && (
+                      <span className="type-tag">{CATEGORY_LABELS[doc.document_category]} · </span>
+                    )}
                     {doc.invoice_number ? `#${doc.invoice_number} · ` : ''}
                     {new Date(doc.created_at + 'Z').toLocaleDateString()}
                     {` · ${doc.property_name || 'No property'}`}

@@ -127,6 +127,6 @@ def test_migrate_creates_empty_database(tmp_path):
     assert out.returncode == 0, out.stderr
     import sqlite3
     con = sqlite3.connect(tmp_path / "fresh" / "morning_assistant.db")
-    assert con.execute("select version_num from alembic_version").fetchone()[0] == "002"
+    assert con.execute("select version_num from alembic_version").fetchone()[0] == "003"
     tables = {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
     assert {"documents", "arrivals", "accounting_claims", "operations"} <= tables

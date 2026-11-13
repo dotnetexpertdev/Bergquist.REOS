@@ -8,7 +8,19 @@ import httpx
 from ..config import settings
 
 
-TODOIST_API_URL = "https://api.todoist.com/rest/v2"
+# Todoist retired REST v2 ("This endpoint is deprecated"); API v1 is the supported one.
+TODOIST_API_URL = "https://api.todoist.com/api/v1"
+
+
+def project_id() -> str:
+    """The configured project's ID.
+
+    Accepts the ID itself or the slug from the project's web address
+    (e.g. ``property-demo-6j277vMvXWm8RXgr`` -> ``6j277vMvXWm8RXgr``).
+    """
+    value = (settings.todoist_project_id or "").strip().rstrip("/")
+    value = value.rsplit("/", 1)[-1]
+    return value.rsplit("-", 1)[-1] if "-" in value else value
 
 
 def is_todoist_enabled() -> bool:
@@ -61,7 +73,7 @@ async def create_task(
     task_data = {
         "content": content,
         "description": description,
-        "project_id": settings.todoist_project_id,
+        "project_id": project_id(),
         "priority": priority,
         "due_date": due_date.isoformat(),
     }
@@ -176,6 +188,39 @@ async def get_task(task_id: str) -> Tuple[Optional[Dict], Optional[str]]:
             return None, f"Task fetch error: {str(e)}"
 
 
+async def find_task_by_text(text: str) -> Tuple[Optional[Dict], Optional[str]]:
+    """An open task in the configured project whose description contains ``text``.
+
+    Used before creating a task, so a task created by an earlier attempt whose reply
+    was lost (network drop, crash) is adopted instead of duplicated.
+    """
+    if not is_todoist_enabled():
+        return None, "Todoist not configured"
+    async with httpx.AsyncClient() as client:
+        try:
+            cursor = None
+            while True:  # API v1 pages its results: {"results": [...], "next_cursor": ...}
+                params = {"project_id": project_id(), "limit": 200}
+                if cursor:
+                    params["cursor"] = cursor
+                response = await client.get(
+                    f"{TODOIST_API_URL}/tasks", params=params,
+                    headers={"Authorization": f"Bearer {settings.todoist_api_token}"},
+                )
+                if response.status_code != 200:
+                    return None, f"Failed to list tasks: {response.text}"
+                body = response.json() or {}
+                tasks = body if isinstance(body, list) else body.get("results") or []
+                for task in tasks:
+                    if text in (task.get("description") or ""):
+                        return task, None
+                cursor = None if isinstance(body, list) else body.get("next_cursor")
+                if not cursor:
+                    return None, None
+        except Exception as e:
+            return None, f"Task lookup error: {str(e)}"
+
+
 async def close_task(task_id: str) -> Tuple[bool, Optional[str]]:
     """Mark a task as complete."""
     if not is_todoist_enabled():
@@ -191,7 +236,7 @@ async def close_task(task_id: str) -> Tuple[bool, Optional[str]]:
             )
             if response.status_code == 404:
                 return False, f"Task {task_id} not found"
-            if response.status_code != 204:
+            if response.status_code not in (200, 204):
                 return False, f"Failed to close task: {response.text}"
 
             return True, None

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ApiError, approveDocument, checkDuplicates, getDocument, getDocumentHistory, getDuplicateCandidates,
-  getProperties, getQBReferenceData, reconcileDocument, resolveDuplicate, retryAttachment, retryExtraction,
-  updateDocument,
+  getProperties, getQBReferenceData, reconcileDocument, resolveCopy, resolveDuplicate, retryAttachment,
+  retryExtraction, updateDocument,
 } from '../api';
 import type {
   DocumentDetail as DocumentDetailType, DuplicateCandidate, HistoryEntry, Property, QBReferenceData,
@@ -11,6 +11,12 @@ import type {
 import StatusBadge from './StatusBadge';
 
 type Notice = { kind: 'error' | 'info' | 'success'; text: string } | null;
+
+const CATEGORY_LABELS: Record<string, string> = {
+  bill: 'Bill / invoice', receipt: 'Receipt (already paid)', bank_statement: 'Bank or card statement',
+  lease: 'Lease or rental agreement', tax_notice: 'Tax or assessment notice', insurance: 'Insurance document',
+  other: 'Other document',
+};
 
 const FIELD_LABELS: Record<string, string> = {
   vendor_name: 'Vendor', total: 'Total', currency: 'Currency', invoice_number: 'Invoice number',
@@ -46,7 +52,7 @@ export default function DocumentDetail() {
   const [dismissing, setDismissing] = useState<string | null>(null);
   const [dismissReason, setDismissReason] = useState('');
   const [form, setForm] = useState({
-    vendor_name: '', invoice_number: '', invoice_date: '', due_date: '', total: '', currency: '',
+    document_type: 'bill', vendor_name: '', invoice_number: '', invoice_date: '', due_date: '', total: '', currency: '',
     property_id: '', qb_vendor_id: '', qb_account_id: '', qb_class_id: '',
   });
 
@@ -59,7 +65,7 @@ export default function DocumentDetail() {
       setHistory(h);
       setCandidates(c);
       setForm({
-        vendor_name: d.effective_vendor_name || '', invoice_number: d.effective_invoice_number || '',
+        document_type: d.document_category || 'bill', vendor_name: d.effective_vendor_name || '', invoice_number: d.effective_invoice_number || '',
         invoice_date: d.effective_invoice_date || '', due_date: d.effective_due_date || '',
         total: d.effective_total != null ? String(d.effective_total) : '', currency: d.effective_currency || '',
         property_id: d.property_id || '', qb_vendor_id: d.qb_vendor_id || '', qb_account_id: d.qb_account_id || '',
@@ -108,6 +114,7 @@ export default function DocumentDetail() {
     if (!doc || !id) return;
     await updateDocument(id, {
       revision: doc.revision,
+      reviewed_document_type: form.document_type !== (doc.document_category || 'bill') ? form.document_type : undefined,
       reviewed_vendor_name: form.vendor_name || undefined,
       reviewed_invoice_number: form.invoice_number || undefined,
       reviewed_invoice_date: form.invoice_date || undefined,
@@ -144,6 +151,11 @@ export default function DocumentDetail() {
   }
 
   const can = (a: string) => doc.available_actions.includes(a);
+  const category = doc.document_category || 'bill';
+  const isBill = category === 'bill';
+  const categories = doc.document_categories && Object.keys(doc.document_categories).length
+    ? doc.document_categories : CATEGORY_LABELS;
+  const copy = doc.copy_of;
   const missing = new Set(doc.missing_fields);
   const openCandidates = candidates.filter((c) => !c.resolved);
   const resolvedCandidates = candidates.filter((c) => c.resolved);
@@ -172,6 +184,38 @@ export default function DocumentDetail() {
           <strong>Action needed:</strong> {doc.pending_question}
         </div>
       )}
+      {copy && (
+        <div className={`card ${copy.confirmed ? 'notice-info' : 'notice-warning'}`} role="region" aria-label="Copy of a stored bill">
+          {copy.confirmed ? (
+            <p style={{ margin: 0 }}>
+              This file is a confirmed copy of <Link to={`/documents/${copy.id}`}>{copy.title}</Link>
+              {' '}({copy.status.replace(/_/g, ' ')}). That record carries the accounting; nothing is posted from this one.
+            </p>
+          ) : (
+            <>
+              <p style={{ marginTop: 0 }}>
+                This looks like another copy of <Link to={`/documents/${copy.id}`}>{copy.title}</Link>
+                {copy.total ? ` · ${copy.currency || ''} ${copy.total}` : ''}
+                {copy.invoice_date ? ` · ${copy.invoice_date}` : ''} · {copy.status.replace(/_/g, ' ')}
+                {copy.qb_bill_id ? ` · QuickBooks bill ${copy.qb_bill_doc_number || copy.qb_bill_id}` : ''}.
+                {' '}It is the same invoice in a different file (for example a phone photo of the paper bill).
+              </p>
+              {can('resolve_copy') && (
+                <div className="row wrap">
+                  <button className="btn-primary" disabled={!!busy} onClick={() => run('copy-same', async () => {
+                    await resolveCopy(id, doc.revision, 'same');
+                    return { kind: 'success', text: 'Linked as a copy. No second bill will be created.' };
+                  })}>Same invoice: link as copy</button>
+                  <button className="btn-secondary" disabled={!!busy} onClick={() => run('copy-different', async () => {
+                    await resolveCopy(id, doc.revision, 'different');
+                    return { kind: 'info', text: 'Kept as a separate bill. QuickBooks is still checked before posting.' };
+                  })}>Different invoice</button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
       {doc.status_reason && <div className="card notice-info" role="status">{doc.status_reason}</div>}
       {doc.qb_discrepancy && <div className="card notice-warning" role="status">{doc.qb_discrepancy}</div>}
       {notice && (
@@ -195,7 +239,7 @@ export default function DocumentDetail() {
         <div>
           <section className="card" aria-labelledby="details-heading">
             <div className="row-between">
-              <h3 id="details-heading">Bill details</h3>
+              <h3 id="details-heading">{isBill ? 'Bill details' : 'Document details'}</h3>
               {!editing && can('update_fields') && (
                 <button className="btn-secondary" onClick={() => setEditing(true)}>Edit details</button>
               )}
@@ -203,6 +247,11 @@ export default function DocumentDetail() {
 
             {editing ? (
               <form className="stack" onSubmit={(e) => { e.preventDefault(); handleSave(); }}>
+                <label>Document type
+                  <select value={form.document_type} onChange={(e) => setForm({ ...form, document_type: e.target.value })}>
+                    {Object.entries(categories).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                  </select>
+                </label>
                 <label>Vendor name<input value={form.vendor_name} onChange={(e) => setForm({ ...form, vendor_name: e.target.value })} /></label>
                 <label>Invoice number<input value={form.invoice_number} onChange={(e) => setForm({ ...form, invoice_number: e.target.value })} /></label>
                 <div className="two-col">
@@ -259,6 +308,9 @@ export default function DocumentDetail() {
               </form>
             ) : (
               <dl className="facts">
+                <dt>Type</dt><dd>{categories[category] || category}
+                  {doc.extracted_document_type && <span className="muted small"> (read as “{doc.extracted_document_type}”)</span>}
+                </dd>
                 <dt>Vendor</dt><dd>{value(doc.effective_vendor_name, 'vendor_name')}</dd>
                 <dt>Invoice #</dt><dd>{value(doc.effective_invoice_number, 'invoice_number')}</dd>
                 <dt>Invoice date</dt><dd>{value(doc.effective_invoice_date, 'invoice_date')}</dd>
@@ -283,6 +335,10 @@ export default function DocumentDetail() {
 
           <section className="card" aria-labelledby="qb-heading">
             <h3 id="qb-heading">QuickBooks</h3>
+            {!isBill && !doc.qb_bill_id && (
+              <p className="small">Filed as {(categories[category] || category).toLowerCase()}. It is not a bill, so nothing
+                is sent to QuickBooks. If it does need paying, change the document type to “Bill / invoice”.</p>
+            )}
             {company && (
               <p className={company.verified ? 'text-success small' : 'text-danger small'}>
                 Company: {company.company_name || 'not connected'}

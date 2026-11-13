@@ -12,7 +12,25 @@ export type DocumentStatus =
   | 'attachment_pending'
   | 'recorded'
   | 'linked_existing'
-  | 'remote_outcome_unknown';
+  | 'remote_outcome_unknown'
+  | 'filed'
+  | 'possible_copy'
+  | 'linked_copy';
+
+export type DocumentCategory =
+  | 'bill' | 'receipt' | 'bank_statement' | 'lease' | 'tax_notice' | 'insurance' | 'other';
+
+export interface CopyOf {
+  id: string;
+  title: string;
+  status: DocumentStatus;
+  total?: string | null;
+  currency?: string | null;
+  invoice_date?: string | null;
+  qb_bill_id?: string | null;
+  qb_bill_doc_number?: string | null;
+  confirmed: boolean;
+}
 
 export type ArrivalMethod = 'email' | 'upload';
 
@@ -40,6 +58,8 @@ export interface DocumentListItem {
   total?: string | number | null;
   currency?: string | null;
   document_type?: string | null;
+  document_category?: DocumentCategory;
+  copy_of_document_id?: string | null;
   property_id?: string | null;
   property_name?: string | null;
   qb_bill_id?: string | null;
@@ -82,6 +102,10 @@ export interface DocumentDetail {
   extracted_service_address?: string | null;
   extraction_uncertain_fields: string[];
   extraction_source_text?: string | null;
+  reviewed_document_type?: DocumentCategory | null;
+  document_category?: DocumentCategory;
+  document_categories?: Record<string, string>;
+  copy_of?: CopyOf | null;
 
   effective_vendor_name?: string | null;
   effective_invoice_number?: string | null;
@@ -219,6 +243,7 @@ export interface SearchResult {
   qb_bill_doc_number?: string | null;
   invoice_date?: string | null;
   arrival_count: number;
+  document_category?: DocumentCategory | null;
   links: { record?: string | null; original?: string | null; quickbooks?: string | null };
 }
 
@@ -231,6 +256,7 @@ export interface ProposedEdit {
   current_value?: string | null;
   proposed_value: string;
   proposed_raw: unknown;
+  updates?: Record<string, unknown>;
 }
 
 export interface SearchResponse {

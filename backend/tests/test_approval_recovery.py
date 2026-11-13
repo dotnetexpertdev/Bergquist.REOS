@@ -86,6 +86,15 @@ async def test_two_files_for_same_vendor_invoice_cannot_both_post(seeded, owner)
     scan = make_pdf(["scanned copy"], dict(FIXTURES["A"]["values"]))  # different bytes, same invoice
     b = (await upload(owner, scan, "scan.pdf")).json()["document_id"]
     assert b != a
+    # First line of defence: the scan is flagged as a possible copy and cannot be approved.
+    flagged = await detail(owner, b)
+    assert flagged["status"] == "possible_copy" and flagged["copy_of"]["id"] == a
+    r = await approve(owner, b)
+    assert r.status_code == 409
+    # Even if the owner wrongly says it is a different invoice, the database claim still blocks it.
+    r = await owner.post(f"/api/documents/{b}/resolve-copy",
+                         json={"revision": flagged["revision"], "resolution": "different"})
+    assert r.status_code == 200 and r.json()["status"] == "ready_for_approval"
     r = await approve(owner, b)
     assert r.status_code == 409 and a in r.json()["detail"]["message"]
     assert qbo.bill_count() == 0 and len(qbo.create_bill_calls) == 1  # only A's (timed-out) attempt

@@ -23,6 +23,47 @@ def utc_now() -> datetime:
     return datetime.utcnow()
 
 
+# Document classification. Only "bill" goes through the accounting workflow; the
+# others are stored, filed and searchable but never posted to QuickBooks.
+DOCUMENT_CATEGORIES = {
+    "bill": "Bill / invoice",
+    "receipt": "Receipt (already paid)",
+    "bank_statement": "Bank or card statement",
+    "lease": "Lease or rental agreement",
+    "tax_notice": "Tax or assessment notice",
+    "insurance": "Insurance document",
+    "other": "Other document",
+}
+
+# Checked in order; the first rule whose pattern matches the extracted type wins.
+_CATEGORY_RULES = [
+    ("receipt", r"\b(receipt|payment confirmation|paid in full)\b"),
+    ("bank_statement", r"\b(bank|credit card|card|checking|savings|brokerage)\b.*\bstatement\b|\bstatement of account\b"),
+    ("lease", r"\b(lease|rental agreement|tenancy)\b"),
+    ("tax_notice", r"\b(assessment|tax notice|notice of (value|assessment))\b"),
+    ("insurance", r"\b(insurance|policy|declarations?)\b(?!.*\b(bill|invoice|premium due)\b)"),
+    ("bill", r"\b(bill|invoice|statement|charges|amount due|premium|utility|tax bill)\b"),
+    ("other", r"\b(contract|agreement|letter|notice|report|estimate|quote|w-?9|1099)\b"),
+]
+
+
+def classify_document_type(extracted: Optional[str]) -> str:
+    """Map the free-text type read from the document to a category.
+
+    Unknown or empty types stay on the bill path so nothing that may need paying is
+    silently filed away; the owner can reclassify it.
+    """
+    import re
+
+    text = (extracted or "").strip().lower()
+    if not text:
+        return "bill"
+    for category, pattern in _CATEGORY_RULES:
+        if re.search(pattern, text):
+            return category
+    return "bill"
+
+
 class Base(DeclarativeBase):
     """Base class for all models."""
     pass
@@ -42,6 +83,9 @@ class DocumentStatus(str, enum.Enum):
     RECORDED = "recorded"  # Complete: bill created and attached
     LINKED_EXISTING = "linked_existing"  # Linked to pre-existing QB bill
     REMOTE_OUTCOME_UNKNOWN = "remote_outcome_unknown"  # QuickBooks may have created the bill; reconcile first
+    FILED = "filed"  # Not a bill (receipt, statement, lease ...): stored and filed, no accounting work
+    POSSIBLE_COPY = "possible_copy"  # Looks like another stored document for the same invoice; owner decides
+    LINKED_COPY = "linked_copy"  # Owner confirmed it is a copy of another document; that one carries the accounting
 
 
 class ArrivalMethod(str, enum.Enum):
@@ -80,6 +124,9 @@ class EventType(str, enum.Enum):
     OPERATION_INTERRUPTED = "operation_interrupted"
     QB_DISCREPANCY_FLAGGED = "qb_discrepancy_flagged"
     APPROVAL_RELEASED = "approval_released"
+    COPY_SUSPECTED = "copy_suspected"
+    COPY_LINKED = "copy_linked"
+    COPY_DISMISSED = "copy_dismissed"
 
 
 class OperationStatus(str, enum.Enum):
@@ -126,6 +173,8 @@ class Document(Base):
     extraction_prompt_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     extracted_document_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Owner's classification (one of DOCUMENT_CATEGORIES); overrides the category derived from extraction
+    reviewed_document_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     extracted_vendor_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     extracted_invoice_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     extracted_invoice_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -172,6 +221,11 @@ class Document(Base):
     last_accounting_check_ok: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     last_accounting_check_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Same invoice in a different file: the earlier document this one appears to copy (possible_copy)
+    # or was confirmed to copy (linked_copy). Dismissed suggestions are remembered so they are not re-asked.
+    copy_of_document_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("documents.id"), nullable=True)
+    copy_dismissed_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+
     # Relationships
     arrivals: Mapped[List["Arrival"]] = relationship("Arrival", back_populates="document")
     events: Mapped[List["AuditEvent"]] = relationship("AuditEvent", back_populates="document")
@@ -206,6 +260,15 @@ class Document(Base):
     @property
     def effective_currency(self) -> Optional[str]:
         return self.reviewed_currency or self.extracted_currency
+
+    @property
+    def document_category(self) -> str:
+        """bill, receipt, bank_statement, lease, tax_notice, insurance or other."""
+        return self.reviewed_document_type or classify_document_type(self.extracted_document_type)
+
+    @property
+    def is_bill(self) -> bool:
+        return self.document_category == "bill"
 
     @property
     def property_name(self) -> Optional[str]:

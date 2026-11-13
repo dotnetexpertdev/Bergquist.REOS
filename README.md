@@ -187,6 +187,8 @@ The automated tests use test providers only. Run these steps yourself with the r
 
 Back up with the server stopped (step 4 shows the command). To restore, stop the server, then run `Expand-Archive backup-<stamp>.zip -DestinationPath <data folder> -Force`. Always restore the database and `documents\` together.
 
+To start over with no documents, stop the server and run `.\venv\Scripts\python.exe backend\cli.py reset-documents`. It saves `backend\backup-<stamp>.zip`, then deletes every stored document, file and history entry. It keeps the QuickBooks/Gmail connections, properties and mappings. Bills already in QuickBooks and tasks in Todoist are not removed.
+
 ## 11. Troubleshooting
 
 * **“Database not found … run cli.py migrate”**: run `doctor` to see which database is expected, then `migrate`.
@@ -205,6 +207,7 @@ Back up with the server stopped (step 4 shows the command). To restore, stop the
 | `/api/documents/upload` | POST | Upload (multipart, with `attempt_id`) |
 | `/api/documents/{id}/update` | POST | Versioned correction (never posts) |
 | `/api/documents/{id}/retry-extraction` | POST | Read again |
+| `/api/documents/{id}/resolve-copy` | POST | Answer “same invoice as the stored bill?” (`same` links it as a copy, `different` keeps it separate) |
 | `/api/gmail/authorize`, `/callback`, `/import`, `/status` | GET/GET/POST/GET | Gmail |
 | `/api/quickbooks/authorize`, `/callback`, `/status`, `/reference-data` | GET | QuickBooks connection |
 | `/api/quickbooks/{id}/check-duplicates`, `/duplicate-candidates`, `/resolve-duplicate` | POST/GET/POST | Duplicate checks |

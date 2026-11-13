@@ -10,9 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..models import Document, AuditEvent, Operation, OperationType, OperationStatus, EventType
 from ..providers.todoist_provider import (
-    is_todoist_enabled, create_task, update_task, close_task,
+    is_todoist_enabled, create_task, update_task, close_task, find_task_by_text,
     build_task_content, build_task_description
 )
+
+# Stable per document: Todoist de-duplicates a repeated X-Request-Id, so a retry of the
+# same document's task creation cannot add a second task.
+_TASK_NAMESPACE = uuid.UUID("6f1d4c52-2b0e-4b55-9a51-3f0c1e7d9a10")
+
+
+def task_request_id(document_id: str) -> str:
+    return str(uuid.uuid5(_TASK_NAMESPACE, f"review-task:{document_id}"))
 
 
 async def create_review_task(
@@ -53,6 +61,15 @@ async def create_review_task(
         due_date=doc.effective_due_date,
     )
 
+    # A task from an earlier attempt whose reply was lost is adopted, not duplicated.
+    existing, _lookup_error = await find_task_by_text(document_url)
+    if existing:
+        doc.todoist_task_id = str(existing["id"])
+        db.add(AuditEvent(document_id=document_id, event_type=EventType.TASK_CREATED, actor="system",
+                          details={"task_id": doc.todoist_task_id, "reason": reason, "adopted_existing": True}))
+        await db.commit()
+        return True, doc.todoist_task_id, None
+
     # Create operation record
     operation_id = str(uuid.uuid4())
     operation = Operation(
@@ -77,7 +94,7 @@ async def create_review_task(
         due_date=due_date,
         priority=priority,
         labels=["bill-review"],
-        request_id=operation_id,
+        request_id=task_request_id(document_id),
     )
 
     if error:

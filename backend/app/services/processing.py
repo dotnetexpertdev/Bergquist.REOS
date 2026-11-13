@@ -16,9 +16,12 @@ async def process_documents(document_ids: Iterable[str]) -> None:
         async with get_db_context() as db:
             await extract_document(db, document_id)
             doc = (await db.execute(select(Document).where(Document.id == document_id))).scalar_one_or_none()
-            if doc and doc.status in (DocumentStatus.NEEDS_REVIEW, DocumentStatus.EXTRACTION_FAILED):
+            if doc and doc.status in (DocumentStatus.NEEDS_REVIEW, DocumentStatus.EXTRACTION_FAILED,
+                                      DocumentStatus.POSSIBLE_COPY):
                 if doc.status == DocumentStatus.EXTRACTION_FAILED:
                     reason = "Extraction failed"
+                elif doc.status == DocumentStatus.POSSIBLE_COPY:
+                    reason = "Possible copy of a stored bill"
                 elif not doc.property_id:
                     reason = "Property not assigned"
                 elif not doc.qb_vendor_id:

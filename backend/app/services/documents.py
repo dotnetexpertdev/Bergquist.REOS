@@ -10,8 +10,8 @@ from sqlalchemy.orm import selectinload
 
 from ..config import settings
 from ..models import (
-    AccountMapping, Arrival, AuditEvent, Document, DocumentStatus, DuplicateCandidate, EventType,
-    Operation, OperationStatus, Property, VendorMapping,
+    DOCUMENT_CATEGORIES, AccountMapping, Arrival, AuditEvent, Document, DocumentStatus, DuplicateCandidate,
+    EventType, Operation, OperationStatus, Property, VendorMapping,
 )
 from ..schemas import ArrivalResponse, DocumentDetail, DocumentListItem, DocumentUpdateRequest
 
@@ -33,15 +33,30 @@ POSTING_STATUSES = (DocumentStatus.APPROVED, DocumentStatus.BILL_CREATED, Docume
 POSTED_STATUSES = (DocumentStatus.RECORDED, DocumentStatus.LINKED_EXISTING, DocumentStatus.ATTACHMENT_PENDING)
 REVIEW_STATUSES = (
     DocumentStatus.NEEDS_REVIEW, DocumentStatus.READY_FOR_APPROVAL, DocumentStatus.EXTRACTION_FAILED,
-    DocumentStatus.DUPLICATE_CANDIDATE,
+    DocumentStatus.DUPLICATE_CANDIDATE, DocumentStatus.POSSIBLE_COPY,
 )
+# Statuses the review logic never moves a document out of on its own.
+SETTLED_STATUSES = POSTING_STATUSES + POSTED_STATUSES + (DocumentStatus.LINKED_COPY,)
 
 
 def normalize_invoice_number(value: Optional[str]) -> str:
     return re.sub(r"[^0-9a-z]", "", (value or "").lower())
 
 
+def normalize_vendor_name(value: Optional[str]) -> str:
+    text = re.sub(r"[^0-9a-z ]", " ", (value or "").lower().replace("&", " and "))
+    words = [w for w in text.split() if w not in ("inc", "llc", "ltd", "co", "corp", "company", "the")]
+    return " ".join(words)
+
+
+def document_title(doc: Document) -> str:
+    vendor = doc.effective_vendor_name or "Unknown vendor"
+    return f"{vendor} invoice {doc.effective_invoice_number}" if doc.effective_invoice_number else vendor
+
+
 def missing_fields(doc: Document) -> List[str]:
+    if not doc.is_bill:
+        return []  # filed documents carry no accounting fields
     present = {
         "vendor_name": bool(doc.effective_vendor_name),
         "total": doc.effective_total is not None,
@@ -63,6 +78,9 @@ def get_pending_question(doc: Document, open_candidates: Optional[List[Duplicate
         return "QuickBooks did not confirm whether the bill was created. Check QuickBooks before trying again."
     if doc.status == DocumentStatus.ATTACHMENT_PENDING:
         return f"Bill {doc.qb_bill_doc_number or doc.qb_bill_id} exists in QuickBooks but the PDF is not attached yet."
+    if doc.status == DocumentStatus.POSSIBLE_COPY:
+        return ("This looks like a copy of a bill that is already stored (same invoice, different file). "
+                "Is it the same invoice?")
     if doc.status == DocumentStatus.DUPLICATE_CANDIDATE:
         if open_candidates:
             c = open_candidates[0]
@@ -83,8 +101,10 @@ def get_available_actions(doc: Document) -> List[str]:
     actions = ["view_original", "view_history"]
     if doc.status == DocumentStatus.EXTRACTION_FAILED:
         actions.append("retry_extraction")
-    if doc.status in REVIEW_STATUSES or doc.status in POSTED_STATUSES:
+    if doc.status in REVIEW_STATUSES or doc.status in POSTED_STATUSES or doc.status == DocumentStatus.FILED:
         actions.append("update_fields")
+    if doc.status == DocumentStatus.POSSIBLE_COPY:
+        actions.append("resolve_copy")
     if doc.status in (DocumentStatus.NEEDS_REVIEW, DocumentStatus.READY_FOR_APPROVAL,
                       DocumentStatus.DUPLICATE_CANDIDATE) and doc.qb_vendor_id and doc.effective_invoice_number:
         actions.append("check_duplicates")
@@ -124,6 +144,8 @@ def _list_item(doc: Document, open_candidates: Optional[List[DuplicateCandidate]
         total=doc.effective_total,
         currency=doc.effective_currency,
         document_type=doc.extracted_document_type,
+        document_category=doc.document_category,
+        copy_of_document_id=doc.copy_of_document_id,
         property_id=doc.property_id,
         property_name=doc.property_name,
         qb_bill_id=doc.qb_bill_id,
@@ -186,6 +208,18 @@ async def get_document_detail(db: AsyncSession, document_id: str) -> Optional[Do
 
     open_candidates = await _open_candidates(db, doc.id)
     company = await company_status(db)
+    copy_of = None
+    if doc.copy_of_document_id:
+        original = await load_document(db, doc.copy_of_document_id)
+        if original:
+            copy_of = {
+                "id": original.id, "title": document_title(original), "status": original.status.value,
+                "total": str(original.effective_total) if original.effective_total is not None else None,
+                "currency": original.effective_currency,
+                "invoice_date": original.effective_invoice_date.isoformat() if original.effective_invoice_date else None,
+                "qb_bill_id": original.qb_bill_id, "qb_bill_doc_number": original.qb_bill_doc_number,
+                "confirmed": doc.status == DocumentStatus.LINKED_COPY,
+            }
     raw = doc.extracted_raw if isinstance(doc.extracted_raw, dict) else {}
 
     arrivals = [
@@ -207,6 +241,8 @@ async def get_document_detail(db: AsyncSession, document_id: str) -> Optional[Do
         extracted_currency=doc.extracted_currency, extracted_service_address=doc.extracted_service_address,
         extraction_uncertain_fields=raw.get("uncertain_fields") or [],
         extraction_source_text=raw.get("source_text"),
+        reviewed_document_type=doc.reviewed_document_type, document_category=doc.document_category,
+        document_categories=DOCUMENT_CATEGORIES, copy_of=copy_of,
         reviewed_vendor_name=doc.reviewed_vendor_name, reviewed_invoice_number=doc.reviewed_invoice_number,
         reviewed_invoice_date=doc.reviewed_invoice_date, reviewed_due_date=doc.reviewed_due_date,
         reviewed_total=doc.reviewed_total, reviewed_currency=doc.reviewed_currency,
@@ -235,6 +271,7 @@ async def get_document_detail(db: AsyncSession, document_id: str) -> Optional[Do
 
 FIELD_MAP = [
     # (request attribute, document attribute, audit name)
+    ("reviewed_document_type", "reviewed_document_type", "document_type"),
     ("reviewed_vendor_name", "reviewed_vendor_name", "vendor_name"),
     ("reviewed_invoice_number", "reviewed_invoice_number", "invoice_number"),
     ("reviewed_invoice_date", "reviewed_invoice_date", "invoice_date"),
@@ -246,7 +283,7 @@ FIELD_MAP = [
     ("qb_account_id", "qb_account_id", "qb_account_id"),
     ("qb_class_id", "qb_class_id", "qb_class_id"),
 ]
-ACCOUNTING_FIELDS = {"vendor_name", "invoice_number", "invoice_date", "due_date", "total", "currency",
+ACCOUNTING_FIELDS = {"document_type", "vendor_name", "invoice_number", "invoice_date", "due_date", "total", "currency",
                      "qb_vendor_id", "qb_account_id", "qb_class_id"}
 
 
@@ -273,8 +310,13 @@ async def update_document(
                                "Resolve it before editing.")
     if doc.status in (DocumentStatus.RECEIVED, DocumentStatus.READING):
         raise UpdateError(409, "The bill is still being read. Try again in a moment.")
+    if doc.status == DocumentStatus.LINKED_COPY:
+        raise UpdateError(409, "This file is a confirmed copy of another document. Make corrections on the "
+                               "original instead.")
 
     errors: Dict[str, str] = {}
+    if update.reviewed_document_type is not None and update.reviewed_document_type not in DOCUMENT_CATEGORIES:
+        errors["reviewed_document_type"] = "Choose one of: " + ", ".join(DOCUMENT_CATEGORIES)
     if update.reviewed_currency is not None and not re.fullmatch(r"[A-Z]{3}", update.reviewed_currency):
         errors["reviewed_currency"] = "Use a 3-letter currency code such as USD"
     if update.reviewed_total is not None and update.reviewed_total < 0:
@@ -285,6 +327,7 @@ async def update_document(
     if errors:
         raise UpdateError(400, "Some values are invalid", errors)
 
+    doc_category_before = doc.document_category
     changes: Dict[str, Dict[str, Any]] = {}
     for req_attr, doc_attr, name in FIELD_MAP:
         new = getattr(update, req_attr)
@@ -305,6 +348,10 @@ async def update_document(
     doc.revision += 1
     for name, change in changes.items():
         details = {"field": name, "old_value": change["old"], "new_value": change["new"], "source": source}
+        if name == "document_type":
+            details["old_value"] = change["old"] or doc_category_before
+            details["old_display"] = DOCUMENT_CATEGORIES.get(details["old_value"], details["old_value"])
+            details["new_display"] = DOCUMENT_CATEGORIES.get(change["new"], change["new"])
         if name == "property_id":
             old_p = (await db.get(Property, change["old"])) if change["old"] else None
             new_p = await db.get(Property, change["new"])
@@ -313,7 +360,10 @@ async def update_document(
         db.add(AuditEvent(document_id=doc.id, event_type=EventType.FIELD_CORRECTED, actor=actor, details=details))
 
     if doc.status in POSTED_STATUSES:
-        affected = sorted(set(changes) & ACCOUNTING_FIELDS)
+        affected = set(changes) & ACCOUNTING_FIELDS
+        if doc.document_category == doc_category_before:
+            affected.discard("document_type")  # confirming the same category changes nothing in QuickBooks
+        affected = sorted(affected)
         if affected:
             note = (f"Corrected locally on {datetime.utcnow():%Y-%m-%d %H:%M} UTC after QuickBooks bill "
                     f"{doc.qb_bill_doc_number or doc.qb_bill_id} existed: {', '.join(affected)}. "
@@ -329,12 +379,90 @@ async def update_document(
     return doc
 
 
+def _near_invoice_key(a: str, b: str) -> bool:
+    """True when two invoice keys differ by at most one edit (two for long numbers)."""
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 5:
+        return False
+    limit = 2 if min(len(a), len(b)) >= 10 else 1
+    if abs(len(a) - len(b)) > limit:
+        return False
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        if min(cur) > limit:
+            return False
+        prev = cur
+    return prev[-1] <= limit
+
+
+async def find_copy_candidate(db: AsyncSession, doc: Document) -> Optional[Document]:
+    """An earlier stored bill for the same vendor invoice, in a different file (photo, rescan ...).
+
+    Identical bytes never get here (they become a second arrival of the same document).
+    Matching needs the invoice number plus vendor or amount (or a near-identical invoice number,
+    as a photo can misread a digit, plus vendor and amount); without an invoice number it
+    needs vendor, amount and invoice date together. Suggestions the owner dismissed are skipped.
+    """
+    if not doc.is_bill:
+        return None
+    key = normalize_invoice_number(doc.effective_invoice_number)
+    vendor = normalize_vendor_name(doc.effective_vendor_name)
+    total = doc.effective_total
+    inv_date = doc.effective_invoice_date
+    if not key and not (vendor and total is not None and inv_date):
+        return None
+    dismissed = set(doc.copy_dismissed_ids or [])
+    others = (await db.execute(
+        select(Document).where(
+            Document.id != doc.id,
+            Document.created_at <= doc.created_at,
+            Document.status.not_in([DocumentStatus.LINKED_COPY, DocumentStatus.FILED, DocumentStatus.RECEIVED,
+                                    DocumentStatus.READING, DocumentStatus.EXTRACTION_FAILED]),
+        ).order_by(Document.created_at)
+    )).scalars().all()
+    for other in others:
+        if other.id in dismissed or not other.is_bill:
+            continue
+        if other.created_at == doc.created_at and other.id > doc.id:
+            continue  # same instant: the lower id counts as the earlier one
+        same_vendor = bool(vendor) and vendor == normalize_vendor_name(other.effective_vendor_name) or (
+            bool(doc.qb_vendor_id) and doc.qb_vendor_id == other.qb_vendor_id)
+        same_total = total is not None and other.effective_total is not None and total == other.effective_total
+        if key:
+            other_key = normalize_invoice_number(other.effective_invoice_number)
+            if key == other_key and (same_vendor or same_total):
+                return other
+            # A photo or screenshot can misread a character or two of the invoice number;
+            # with vendor AND amount both matching, that is still very likely the same bill.
+            if other_key and same_vendor and same_total and _near_invoice_key(key, other_key):
+                return other
+        elif same_vendor and same_total and inv_date == other.effective_invoice_date:
+            return other
+    return None
+
+
 async def update_document_status(db: AsyncSession, doc: Document, actor: str) -> None:
     """Recompute review status. Never moves a document into or out of posting states."""
-    if doc.status in POSTING_STATUSES or doc.status in POSTED_STATUSES:
+    if doc.status in SETTLED_STATUSES:
         return
     old_status = doc.status
-    if await _open_candidates(db, doc.id):
+    copy_of = await find_copy_candidate(db, doc)
+    if copy_of is None and doc.copy_of_document_id:
+        doc.copy_of_document_id = None
+    if not doc.is_bill:
+        new_status = DocumentStatus.FILED
+    elif copy_of is not None:
+        new_status = DocumentStatus.POSSIBLE_COPY
+        if doc.copy_of_document_id != copy_of.id:
+            doc.copy_of_document_id = copy_of.id
+            db.add(AuditEvent(document_id=doc.id, event_type=EventType.COPY_SUSPECTED, actor="system",
+                              details={"original_id": copy_of.id, "original_title": document_title(copy_of),
+                                       "original_status": copy_of.status.value}))
+    elif await _open_candidates(db, doc.id):
         new_status = DocumentStatus.DUPLICATE_CANDIDATE
     elif not missing_fields(doc):
         new_status = DocumentStatus.READY_FOR_APPROVAL
@@ -348,9 +476,42 @@ async def update_document_status(db: AsyncSession, doc: Document, actor: str) ->
                           details={"old_status": old_status.value, "new_status": new_status.value}))
 
 
+async def resolve_copy(db: AsyncSession, document_id: str, revision: int, resolution: str, actor: str) -> Document:
+    """Owner decision on a suspected copy: "same" links it to the original, "different" keeps it separate."""
+    doc = await load_document(db, document_id)
+    if not doc:
+        raise UpdateError(404, "Document not found")
+    if doc.revision != revision:
+        raise UpdateError(409, "This document changed since you loaded it. Reload and decide again.")
+    if doc.status != DocumentStatus.POSSIBLE_COPY or not doc.copy_of_document_id:
+        raise UpdateError(409, "There is no open copy question for this document.")
+    original = await load_document(db, doc.copy_of_document_id)
+    details = {"original_id": doc.copy_of_document_id,
+               "original_title": document_title(original) if original else None}
+    doc.revision += 1
+    if resolution == "same":
+        old = doc.status
+        doc.status = DocumentStatus.LINKED_COPY
+        db.add(AuditEvent(document_id=doc.id, event_type=EventType.COPY_LINKED, actor=actor, details=details))
+        db.add(AuditEvent(document_id=doc.id, event_type=EventType.STATUS_CHANGED, actor=actor,
+                          details={"old_status": old.value, "new_status": doc.status.value}))
+        if original:
+            db.add(AuditEvent(document_id=original.id, event_type=EventType.COPY_LINKED, actor=actor,
+                              details={"copy_id": doc.id, "copy_filename": next(
+                                  (a.original_filename for a in doc.arrivals if a.original_filename), None)}))
+    elif resolution == "different":
+        doc.copy_dismissed_ids = sorted(set(doc.copy_dismissed_ids or []) | {doc.copy_of_document_id})
+        doc.copy_of_document_id = None
+        db.add(AuditEvent(document_id=doc.id, event_type=EventType.COPY_DISMISSED, actor=actor, details=details))
+        await update_document_status(db, doc, actor)
+    else:
+        raise UpdateError(400, "Resolution must be 'same' or 'different'")
+    return doc
+
+
 async def get_documents_needing_review(db: AsyncSession, limit: int = 50) -> List[DocumentListItem]:
     return await get_document_list(db, status_filter=[
-        DocumentStatus.NEEDS_REVIEW, DocumentStatus.EXTRACTION_FAILED, DocumentStatus.DUPLICATE_CANDIDATE,
+        DocumentStatus.NEEDS_REVIEW, DocumentStatus.POSSIBLE_COPY, DocumentStatus.EXTRACTION_FAILED, DocumentStatus.DUPLICATE_CANDIDATE,
         DocumentStatus.ATTACHMENT_PENDING, DocumentStatus.REMOTE_OUTCOME_UNKNOWN, DocumentStatus.APPROVED,
         DocumentStatus.BILL_CREATED,
     ], limit=limit)
