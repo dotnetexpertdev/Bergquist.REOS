@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import ENV_FILE_REASON, GMAIL_CALLBACK_ROUTE, QUICKBOOKS_CALLBACK_ROUTE, settings
 from .database import check_schema, get_db_context
-from .routes import auth, documents, gmail, integrations, mappings, properties, quickbooks, search
+from .routes import admin, auth, documents, gmail, integrations, mappings, properties, quickbooks, search
 from .services.accounting import recover_interrupted_operations
 from .services.extraction import process_pending_extractions
 
@@ -62,7 +62,7 @@ app.add_middleware(
 )
 
 for r in (auth.router, documents.router, gmail.router, quickbooks.router, search.router, properties.router,
-          integrations.router, mappings.router):
+          integrations.router, mappings.router, admin.router):
     app.include_router(r)
 
 # If the configured callback paths differ from the canonical routes (for example

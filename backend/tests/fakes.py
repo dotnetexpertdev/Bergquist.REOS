@@ -50,6 +50,7 @@ class FakeQBOServer:
         self.download_fail = False
         self.company_info_fail = False
         self.create_delay = 0.0
+        self.delete_mode = "ok"  # ok | reject
 
     # -- helpers for tests ---------------------------------------------------
     def _id(self) -> str:
@@ -146,11 +147,25 @@ class FakeQBOServer:
         if request.method == "GET" and route.startswith("download/"):
             att_id = route.split("/", 1)[1]
             return httpx.Response(200, text=f"https://download.fake.test/att/{att_id}")
+        if request.method == "POST" and url.params.get("operation") == "delete" and route in ("bill", "attachable"):
+            return self._delete(route, json.loads(body))
         if request.method == "POST" and route == "bill":
             return await self._create_bill(url.params.get("requestid"), json.loads(body))
         if request.method == "POST" and route == "upload":
             return self._upload(url.params.get("requestid"), request.headers.get("content-type", ""), body)
         return self._fault(404, f"Unsupported fake route {request.method} {route}")
+
+    def _delete(self, route: str, payload: Dict[str, Any]) -> httpx.Response:
+        store = self.bills if route == "bill" else self.attachables
+        entity_id = str(payload.get("Id"))
+        if route == "bill" and self.delete_mode == "reject":
+            return self._fault(400, "Delete rejected: a payment is linked to this bill")
+        if entity_id not in store or "SyncToken" not in payload:
+            return self._fault(400, "Object Not Found")
+        del store[entity_id]
+        self.contents.pop(entity_id, None)
+        name = "Bill" if route == "bill" else "Attachable"
+        return httpx.Response(200, json={name: {"Id": entity_id, "status": "Deleted"}})
 
     def _query(self, query: str) -> httpx.Response:
         m = re.match(r"SELECT \* FROM (\w+)(?: WHERE (.*?))?(?: ORDERBY \w+)?(?: STARTPOSITION (\d+) MAXRESULTS (\d+))?$",

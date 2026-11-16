@@ -1,5 +1,6 @@
 import { ReactNode, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import ResetDemo from './ResetDemo';
 import SearchBar from './SearchBar';
 
 interface LayoutProps {
@@ -11,6 +12,7 @@ interface LayoutProps {
 export default function Layout({ children, username, onLogout }: LayoutProps) {
   const location = useLocation();
   const [showSearch, setShowSearch] = useState(false);
+  const [showReset, setShowReset] = useState(false);
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -62,6 +64,21 @@ export default function Layout({ children, username, onLogout }: LayoutProps) {
                 </svg>
             </Link>
 
+            <button
+              className="btn-secondary"
+              onClick={() => setShowReset(true)}
+              style={{ padding: '0.5rem', display: 'inline-flex', color: 'var(--danger)' }}
+              title="Reset demo data"
+              aria-label="Reset demo data"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 6h18" />
+                <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+                <path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6" />
+                <path d="M10 11v6M14 11v6" />
+              </svg>
+            </button>
+
             <span className="hide-mobile" style={{ color: 'var(--gray-500)', fontSize: '0.875rem' }}>
               {username}
             </span>
@@ -76,6 +93,10 @@ export default function Layout({ children, username, onLogout }: LayoutProps) {
       {/* Search overlay */}
       {showSearch && (
         <SearchBar onClose={() => setShowSearch(false)} />
+      )}
+
+      {showReset && (
+        <ResetDemo onClose={() => setShowReset(false)} />
       )}
 
       {/* Main content */}

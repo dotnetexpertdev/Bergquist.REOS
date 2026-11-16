@@ -191,3 +191,31 @@ export const createAccountMapping = (category: string, qbAccountId: string, qbAc
     { category, qb_account_id: qbAccountId, qb_account_name: qbAccountName });
 export const deleteAccountMapping = (id: string) =>
   json<{ success: boolean }>(`/api/mappings/accounts/${id}`, { method: 'DELETE' });
+
+// Demo reset
+export interface ResetDemoPreview {
+  confirm_word: string;
+  documents: number;
+  arrivals: number;
+  history_events: number;
+  stored_files: number;
+  todoist_tasks: number;
+  quickbooks: {
+    available: boolean;
+    problem: string | null;
+    company_name: string | null;
+    bills: { id: string; doc_number: string | null; vendor_name: string | null; total: string | null; txn_date: string | null }[];
+  };
+}
+export interface ResetDemoResult {
+  success: boolean;
+  documents_deleted: number;
+  files_deleted: number;
+  files_left: number;
+  todoist_tasks_closed: number;
+  quickbooks: { bills_deleted: number; attachments_deleted: number; skipped: boolean };
+  backup: string | null;
+}
+export const getResetDemoPreview = () => json<ResetDemoPreview>('/api/admin/reset-demo');
+export const resetDemo = (confirm: string, deleteQuickbooks: boolean) =>
+  post<ResetDemoResult>('/api/admin/reset-demo', { confirm, delete_quickbooks: deleteQuickbooks });

@@ -69,8 +69,12 @@ def qbo_quote(value: str) -> str:
     return str(value).replace("\\", "\\\\").replace("'", "\\'")
 
 
+# Every bill this app creates carries this text in its PrivateNote (memo).
+APP_BILL_MARKER_PREFIX = "Morning Assistant document "
+
+
 def bill_operation_marker(document_id: str, operation_id: str) -> str:
-    return f"Morning Assistant document {document_id} operation {operation_id}"
+    return f"{APP_BILL_MARKER_PREFIX}{document_id} operation {operation_id}"
 
 
 def attachment_note(sha256_hash: str, document_id: str) -> str:
@@ -228,10 +232,12 @@ class QuickBooksAPI:
     async def _query(self, query: str) -> ReadResult:
         return await self._get("query", {"query": query})
 
-    async def _write(self, path: str, request_id: str, **kwargs) -> WriteResult:
+    async def _write(self, path: str, request_id: Optional[str], extra_params: Optional[Dict[str, str]] = None,
+                     **kwargs) -> WriteResult:
         try:
             async with self._client() as client:
-                response = await client.post(self._url(path), params=self._params(request_id), **kwargs)
+                response = await client.post(self._url(path), params={**self._params(request_id),
+                                                                      **(extra_params or {})}, **kwargs)
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             # The connection never opened: QuickBooks cannot have received the request.
             return WriteResult("failed", error=f"Could not reach QuickBooks ({type(e).__name__})")
@@ -286,6 +292,14 @@ class QuickBooksAPI:
             return BillLookup(complete=False, bills=[], pages_read=pages, error=err)
         return BillLookup(complete=True, bills=rows, pages_read=pages)
 
+    async def find_app_bills(self) -> BillLookup:
+        """Every bill in the company that this app created (recognised by its memo marker)."""
+        rows, err, pages = await self._paged("SELECT * FROM Bill ORDERBY Id", "Bill")
+        if err:
+            return BillLookup(complete=False, bills=[], pages_read=pages, error=err)
+        ours = [b for b in rows if APP_BILL_MARKER_PREFIX in (b.get("PrivateNote") or "")]
+        return BillLookup(complete=True, bills=ours, pages_read=pages)
+
     async def get_bill(self, bill_id: str) -> ReadResult:
         result = await self._get(f"bill/{bill_id}")
         if result.ok:
@@ -329,6 +343,11 @@ class QuickBooksAPI:
                 return WriteResult("unknown", error="QuickBooks response did not include a bill ID")
             result.data = bill
         return result
+
+    async def delete_entity(self, entity: str, entity_id: str, sync_token: str) -> WriteResult:
+        """Delete a Bill or Attachable (demo reset only). ``entity`` is the lower-case endpoint name."""
+        return await self._write(entity, None, extra_params={"operation": "delete"}, headers=self._headers(),
+                                 json={"Id": str(entity_id), "SyncToken": str(sync_token)})
 
     async def upload_attachment(self, *, entity_type: str, entity_id: str, content: bytes, filename: str,
                                 content_type: str, note: str, request_id: str) -> WriteResult:

@@ -187,7 +187,9 @@ The automated tests use test providers only. Run these steps yourself with the r
 
 Back up with the server stopped (step 4 shows the command). To restore, stop the server, then run `Expand-Archive backup-<stamp>.zip -DestinationPath <data folder> -Force`. Always restore the database and `documents\` together.
 
-To start over with no documents, stop the server and run `.\venv\Scripts\python.exe backend\cli.py reset-documents`. It saves `backend\backup-<stamp>.zip`, then deletes every stored document, file and history entry. It keeps the QuickBooks/Gmail connections, properties and mappings. Bills already in QuickBooks and tasks in Todoist are not removed.
+To start over for a demo from the browser, click the red **Reset demo data** (bin) button next to Settings. It shows what will be removed, asks you to type `RESET`, saves `backup-<stamp>.zip` beside the data folder, then deletes every stored document, file and history entry, closes the Todoist tasks the app opened, and deletes the QuickBooks bills **this app created** (recognised by the memo it writes) with their attachments. Bills entered in QuickBooks by hand are never deleted, and connections, properties and mappings are kept. If QuickBooks refuses a deletion, the app's own data is left untouched.
+
+To do the local part from the command line instead, stop the server and run `.\venv\Scripts\python.exe backend\cli.py reset-documents`. It saves `backend\backup-<stamp>.zip`, then deletes every stored document, file and history entry. It keeps the QuickBooks/Gmail connections, properties and mappings. Bills already in QuickBooks and tasks in Todoist are not removed.
 
 ## 11. Troubleshooting
 
@@ -214,3 +216,4 @@ To start over with no documents, stop the server and run `.\venv\Scripts\python.
 | `/api/quickbooks/{id}/approve` | POST | **Create unpaid bill** |
 | `/api/quickbooks/{id}/reconcile`, `/retry-attachment` | POST | Recovery |
 | `/api/search`, `/api/transcribe` | POST | Assistant |
+| `/api/admin/reset-demo` | GET/POST | Preview / run the demo reset (POST needs `confirm: "RESET"`) |
