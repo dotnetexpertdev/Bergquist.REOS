@@ -125,7 +125,8 @@ async def test_repeat_checks_update_candidate_and_dismissal_is_preserved(seeded,
                               .where(DuplicateCandidate.document_id == doc_id))).scalar()
     assert n == 1
     cand = (await owner.get(f"/api/quickbooks/{doc_id}/duplicate-candidates")).json()[0]
-    assert cand["seen_count"] == 3 and "total" in cand["match_reason"] and "differ" in cand["match_reason"]
+    # one automatic check when the bill was read, then the three requested here
+    assert cand["seen_count"] == 4 and "total" in cand["match_reason"] and "differ" in cand["match_reason"]
 
     no_reason = await owner.post(f"/api/quickbooks/{doc_id}/resolve-duplicate",
                                  json={"candidate_id": cand["id"], "resolution": "dismissed"})

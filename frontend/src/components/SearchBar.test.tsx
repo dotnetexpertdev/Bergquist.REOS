@@ -4,10 +4,14 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SearchResponse } from '../types';
 
-vi.mock('../api', () => ({ search: vi.fn(), transcribe: vi.fn(), updateDocument: vi.fn() }));
+vi.mock('../api', () => ({
+  search: vi.fn(), transcribe: vi.fn(), updateDocument: vi.fn(), importGmailMessages: vi.fn(),
+  DOCUMENTS_CHANGED: 'documents-changed',
+}));
 
 import * as api from '../api';
 import SearchBar from './SearchBar';
+import { pickFemaleVoice } from '../voice';
 
 const m = vi.mocked(api);
 
@@ -108,6 +112,104 @@ describe('Assistant questions', () => {
     expect(window.speechSynthesis.speak).toHaveBeenCalledTimes(1);
     await user.click(within(region).getByRole('button', { name: 'Stop playback' }));
     expect(window.speechSynthesis.cancel).toHaveBeenCalled();
+  });
+});
+
+describe('Voice used for Play answer', () => {
+  const voice = (name: string, lang = 'en-US') => ({ name, lang }) as SpeechSynthesisVoice;
+
+  it('prefers a female English voice over the default male one', () => {
+    expect(pickFemaleVoice([voice('Microsoft David - English (United States)'),
+      voice('Microsoft Zira - English (United States)'), voice('Microsoft Mark - English (United States)')])?.name)
+      .toBe('Microsoft Zira - English (United States)');
+    expect(pickFemaleVoice([voice('Google UK English Male', 'en-GB'), voice('Google US English'),
+      voice('Google español', 'es-ES')])?.name).toBe('Google US English');
+    expect(pickFemaleVoice([voice('Microsoft Zira - English (United States)'),
+      voice('Microsoft Aria Online (Natural) - English (United States)')])?.name)
+      .toBe('Microsoft Aria Online (Natural) - English (United States)');
+  });
+
+  it('falls back to the browser default when there is no female voice', () => {
+    expect(pickFemaleVoice([voice('Microsoft David - English (United States)'), voice('Google UK English Male', 'en-GB')])).toBeNull();
+    expect(pickFemaleVoice([])).toBeNull();
+  });
+
+  it('speaks the answer with the chosen voice', async () => {
+    const user = userEvent.setup();
+    const zira = voice('Microsoft Zira - English (United States)');
+    const speak = vi.fn();
+    (window as unknown as { speechSynthesis: unknown }).speechSynthesis = {
+      speak, cancel: vi.fn(), getVoices: () => [voice('Microsoft David - English (United States)'), zira] };
+    m.search.mockResolvedValue(answer());
+    renderBar();
+    await user.type(screen.getByLabelText('Question'), 'power bill');
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    await user.click(await screen.findByRole('button', { name: 'Play answer' }));
+    expect(speak).toHaveBeenCalledTimes(1);
+    expect(speak.mock.calls[0][0].voice).toBe(zira);
+  });
+});
+
+describe('Question spoken on the main page', () => {
+  it('opens with the transcript and answers it without pressing Ask', async () => {
+    m.search.mockResolvedValue(answer());
+    render(<MemoryRouter><SearchBar onClose={() => undefined} initialQuery="What happened to the power bill?" /></MemoryRouter>);
+    expect(screen.getByLabelText('Question')).toHaveValue('What happened to the power bill?');
+    expect(await screen.findByRole('region', { name: 'Answer' })).toHaveTextContent('Metro Power & Light');
+    expect(m.search).toHaveBeenCalledTimes(1);
+    expect(m.search).toHaveBeenCalledWith('What happened to the power bill?', undefined, undefined);
+  });
+});
+
+describe('Import from inbox command', () => {
+  const imported = { success: true, messages_found: 2, attachments_processed: 2, imported: 1, already_processed: 1,
+    skipped: 0, failed: 0, results: [] };
+
+  it('runs the import when the command is typed, and tells the list to reload', async () => {
+    const user = userEvent.setup();
+    m.importGmailMessages.mockResolvedValue(imported);
+    const changed = vi.fn();
+    window.addEventListener('documents-changed', changed);
+    renderBar();
+    await user.type(screen.getByLabelText('Question'), 'Import from inbox');
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Imported 1 new document(s) from 2 labeled email(s). Already processed: 1, skipped: 0, failed: 0.');
+    expect(m.importGmailMessages).toHaveBeenCalledTimes(1);
+    expect(m.search).not.toHaveBeenCalled();
+    expect(changed).toHaveBeenCalledTimes(1);
+    window.removeEventListener('documents-changed', changed);
+  });
+
+  it('runs the import straight from a spoken command, without pressing Ask', async () => {
+    const user = userEvent.setup();
+    m.transcribe.mockResolvedValue({ success: true, transcript: 'Import from inbox.' });
+    m.importGmailMessages.mockResolvedValue(imported);
+    renderBar();
+    await user.click(screen.getByRole('button', { name: 'Start voice recording' }));
+    await user.click(screen.getByRole('button', { name: 'Stop recording' }));
+    await waitFor(() => expect(m.importGmailMessages).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/Imported 1 new document\(s\)/)).toBeInTheDocument();
+    expect(m.search).not.toHaveBeenCalled();
+  });
+
+  it('shows the reason when the import fails', async () => {
+    const user = userEvent.setup();
+    m.importGmailMessages.mockResolvedValue({ ...imported, success: false, imported: 0, error: 'Gmail is not connected' });
+    renderBar();
+    await user.type(screen.getByLabelText('Question'), 'check my email for new bills');
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Import from inbox failed: Gmail is not connected');
+  });
+
+  it('does not mistake a question about an emailed bill for the command', async () => {
+    const user = userEvent.setup();
+    m.search.mockResolvedValue(answer());
+    renderBar();
+    await user.type(screen.getByLabelText('Question'), 'What happened to the bill that came by email?');
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+    await screen.findByRole('region', { name: 'Answer' });
+    expect(m.importGmailMessages).not.toHaveBeenCalled();
   });
 });
 

@@ -464,7 +464,10 @@ def _status_sentence(doc: Document, original: Optional[Document] = None) -> str:
     if s == DocumentStatus.EXTRACTION_FAILED:
         return "It could not be read automatically and is waiting for review. Nothing has been posted."
     question = get_pending_question(doc)
-    return f"It needs your review{': ' + question if question else ''}. Nothing has been posted to QuickBooks."
+    review = f"It needs your review: {question}" if question else "It needs your review"
+    if not review.endswith(("?", ".", "!")):
+        review += "."  # a question already ends the sentence; avoid "…for?."
+    return f"{review} Nothing has been posted to QuickBooks."
 
 
 def _arrivals_sentence(doc: Document) -> str:
@@ -670,6 +673,24 @@ async def propose_correction(db: AsyncSession, doc: Document, field_name: str, v
     return proposal, text
 
 
+def _describes_another_bill(context: Document, others: List[Document], terms: List[str],
+                            criteria: Criteria) -> bool:
+    """True when the question names an amount, date or words that fit another bill, not the open one.
+
+    "Show me the bill for about 74 dollars" while a 412.00 bill is open is a new search, not a
+    follow-up about the open bill. A question with no such detail ("which property was it for?"),
+    whose detail fits the open bill, or whose words match nothing at all ("how much was it?")
+    stays a follow-up.
+    """
+    if criteria.amounts and not _amount_matches(context, criteria):
+        return True
+    if criteria.has_date and not _date_matches(context, criteria):
+        return True
+    if terms and not any(_score(context, terms)):
+        return any(any(_score(d, terms)) for d in others)
+    return False
+
+
 def _describe_criteria(criteria: Criteria, terms: List[str], query: str) -> str:
     parts = []
     if terms:
@@ -692,6 +713,10 @@ async def ask(db: AsyncSession, query: str, context_document_id: Optional[str],
     context = by_id.get(context_document_id) if context_document_id else None
     interp, source = await interpret(query, context is not None)
     criteria = parse_criteria(query)
+    if interp.intent == "followup" and context is not None and _describes_another_bill(
+            context, [d for d in docs if d.id != context.id and d.status != DocumentStatus.LINKED_COPY],
+            interp.search_terms, criteria):
+        interp.intent = "lookup"
     base: Dict[str, Any] = {"success": True, "interpreted_by": source, "intent": interp.intent,
                             "documents": [], "history": [], "needs_clarification": False}
 

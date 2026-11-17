@@ -14,7 +14,7 @@ Claude Code is the development tool. The running application uses the owner's **
 
 ## Demo goal
 
-A vendor, such as the electricity company, emails a bill to you, the property owner. You receive the email in your Gmail inbox with the bill attached as a PDF. You label the email **Property Demo** and click **Import demo emails** on the private web page. The app saves the PDF and shows you the bill details. After you check the details and approve the entry, the app records an unpaid bill in your QuickBooks test company and attaches the PDF.
+A vendor, such as the electricity company, emails a bill to you, the property owner. You receive the email in your Gmail inbox with the bill attached as a PDF. You label the email **Property Demo** and click **Import From Inbox** on the private web page. The app saves the PDF and shows you the bill details. After you check the details and approve the entry, the app records an unpaid bill in your QuickBooks test company and attaches the PDF.
 
 To test duplicate handling, you upload that same PDF from your phone. The app records both ways it received the PDF and keeps one QuickBooks bill. If the property is unclear, the app asks you to select it. Later, you can type or say “What happened to the electricity bill?” to find the original and see what happened.
 
@@ -67,7 +67,7 @@ Use a small single-instance application. Default to FastAPI, SQLAlchemy with SQL
 
 **Acceptance criteria**
 
-- Connect Gmail read-only. Clicking **Import demo emails** lists messages with the configured **Property Demo** label. Fetch contents only for those messages.
+- Connect Gmail read-only. Clicking **Import From Inbox** lists messages with the configured **Property Demo** label. Fetch contents only for those messages.
 - Process each supported attachment individually. Capture mailbox, message ID, attachment identity, filename, sender, receipt time, and source reference. Preserve the original email source for the labeled message and the original attachment bytes.
 - A second import of the same message and attachment does not count as a new arrival. A genuinely new message containing the same PDF does count as a new arrival.
 - Show import results, including skipped unsupported attachments and failures. A retry processes unfinished items even if other attachments in that batch succeeded.
@@ -213,7 +213,7 @@ Use a small single-instance application. Default to FastAPI, SQLAlchemy with SQL
 
 | Test | Action | Pass condition |
 |---|---|---|
-| 1. Email intake | In your Gmail inbox, label the email you received from the vendor with bill A attached. Leave an unrelated email unlabeled and click **Import demo emails** twice. | A appears once with one email arrival and its untouched original. The unrelated email is absent. |
+| 1. Email intake | In your Gmail inbox, label the email you received from the vendor with bill A attached. Leave an unrelated email unlabeled and click **Import From Inbox** twice. | A appears once with one email arrival and its untouched original. The unrelated email is absent. |
 | 2. Accounting | Review A and approve it. Repeat the click. | One unpaid bill in the intended company, correct values, one attached PDF, and a saved bill reference. |
 | 3. Phone intake | Upload the same A from the phone under a different filename. | One stored PDF, two genuine arrivals, one QuickBooks bill, and one task if Todoist is enabled. |
 | 4. Uncertainty | Upload B, inspect the question, and correct the classification. | B is visible before correction, owner decision is logged, and saving the change does not post a bill. |

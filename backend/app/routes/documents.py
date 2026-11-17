@@ -19,6 +19,7 @@ from ..schemas import (
     DocumentDetail, DocumentListItem, DocumentUpdateRequest, DocumentUpdateResponse, HistoryEntry, ResolveCopyRequest,
     UploadResponse,
 )
+from ..services.accounting import auto_duplicate_check
 from ..services.documents import (
     UpdateError, get_available_actions, get_document_detail, get_document_history, get_document_list,
     get_documents_needing_review, get_documents_ready_for_approval, get_pending_question, missing_fields,
@@ -114,6 +115,11 @@ async def update_document_route(document_id: str, update: DocumentUpdateRequest,
         raise HTTPException(status_code=e.status_code,
                             detail={"message": e.message, "field_errors": e.field_errors} if e.field_errors else e.message)
     await db.commit()
+    if doc.last_accounting_check_ok is None:
+        # The facts compared with QuickBooks are new or have changed: look for an existing bill now
+        # (read-only) so the status returned below is already the checked one.
+        await auto_duplicate_check(db, document_id, username)
+        await db.refresh(doc)
     return DocumentUpdateResponse(
         success=True, revision=doc.revision, status=doc.status.value,
         available_actions=get_available_actions(doc), pending_question=get_pending_question(doc),

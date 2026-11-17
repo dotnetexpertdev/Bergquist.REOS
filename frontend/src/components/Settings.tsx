@@ -72,7 +72,7 @@ export default function Settings() {
   }
 
   return (
-    <div>
+    <div className="settings">
       <h2>Settings</h2>
       {oauthError && <div className="card notice-error" role="alert">Connection problem: {oauthError.replace(/_/g, ' ')}
         {params.get('expected') && ` (expected company ${params.get('expected')}, got ${params.get('got')})`}</div>}

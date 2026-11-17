@@ -56,6 +56,28 @@ async def test_electricity_question_and_follow_up(seeded, owner):
     assert follow["answer"].startswith("The Metro Power & Light invoice MPL-2026-0415 bill is for Demo Property.")
 
 
+async def test_question_about_another_bill_starts_a_new_search_while_one_is_open(seeded, owner):
+    a = await upload_fixture(owner, "A")  # Metro Power & Light, USD 142.50
+    b = await upload_fixture(owner, "B")  # City Water Dept, USD 61.20
+    first = await ask(owner, "What happened to the power bill?")
+    assert first["selected_document_id"] == a
+
+    # A rough amount that is not the open bill's amount: find the other bill.
+    res = await ask(owner, "Show me the bill for about 61 dollars", context=a)
+    assert res["selected_document_id"] == b and res["intent"] == "lookup"
+    assert "City Water Dept" in res["answer"] and "USD 61.20" in res["answer"]
+
+    # Words that describe a different bill do the same.
+    res = await ask(owner, "And the water one?", context=a)
+    assert res["selected_document_id"] == b
+
+    # Real follow-ups still stay on the open bill, including one that repeats its own amount.
+    res = await ask(owner, "Which property was it for?", context=a)
+    assert res["selected_document_id"] == a and res["intent"] == "followup"
+    res = await ask(owner, "Is it the one for 142.50?", context=a)
+    assert res["selected_document_id"] == a
+
+
 async def test_two_matching_bills_ask_owner_to_choose(seeded, owner):
     a = await upload_fixture(owner, "A")
     second = dict(FIXTURES["A"]["values"], invoice_number="MPL-2026-0515", invoice_date="2026-11-15",

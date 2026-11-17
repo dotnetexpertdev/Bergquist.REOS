@@ -132,6 +132,8 @@ export async function authorizeGmail() {
 }
 export const disconnectGmail = () => post<{ success: boolean }>('/api/gmail/disconnect');
 export const importGmailMessages = () => post<GmailImportResponse>('/api/gmail/import');
+// Window event fired after documents were added outside the list (for example by the assistant).
+export const DOCUMENTS_CHANGED = 'documents-changed';
 
 // QuickBooks
 export const getQBStatus = () => json<QBConnectionStatus>('/api/quickbooks/status');

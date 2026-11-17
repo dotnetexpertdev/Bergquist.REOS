@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { search, transcribe, updateDocument } from '../api';
+import { DOCUMENTS_CHANGED, importGmailMessages, search, transcribe, updateDocument } from '../api';
 import type { SearchResponse } from '../types';
+import { femaleVoice, warmUpVoices } from '../voice';
 import StatusBadge from './StatusBadge';
 
 interface SearchBarProps {
   onClose: () => void;
+  // A question already spoken on the main page: shown in the box and asked straight away.
+  initialQuery?: string;
 }
 
 const MIME_PREFERENCE = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
@@ -15,11 +18,18 @@ function pickMimeType(): string | undefined {
   return MIME_PREFERENCE.find((t) => MediaRecorder.isTypeSupported(t));
 }
 
-export default function SearchBar({ onClose }: SearchBarProps) {
+// "Import from inbox", "check my email for new bills", "pull in my Gmail" ...
+const IMPORT_COMMAND = /^\s*(?:please\s+|can you\s+|could you\s+)?(?:import|check|pull|fetch|scan|sync|load)\b.*\b(?:inbox|e-?mails?|gmail|mail)\b/i;
+
+export function isImportCommand(text: string): boolean {
+  return IMPORT_COMMAND.test(text);
+}
+
+export default function SearchBar({ onClose, initialQuery = '' }: SearchBarProps) {
   const location = useLocation();
   const routeDocId = location.pathname.match(/^\/documents\/([^/]+)/)?.[1];
 
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SearchResponse | null>(null);
   const [contextDocId, setContextDocId] = useState<string | undefined>(routeDocId);
@@ -28,7 +38,7 @@ export default function SearchBar({ onClose }: SearchBarProps) {
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [voiceError, setVoiceError] = useState('');
-  const [fromVoice, setFromVoice] = useState(false);
+  const [fromVoice, setFromVoice] = useState(!!initialQuery);
   const [speaking, setSpeaking] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -38,9 +48,14 @@ export default function SearchBar({ onClose }: SearchBarProps) {
   const cancelledRef = useRef(false);
   const lastAudioRef = useRef<Blob | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const askedInitialRef = useRef(false);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    inputRef.current?.focus();
+    // The panel sits at the top of the page: bring it into view if the page was scrolled down.
+    panelRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    inputRef.current?.focus({ preventScroll: true });
+    warmUpVoices(); // so the voice list is ready by the time Play answer is clicked
     return () => {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
@@ -53,8 +68,34 @@ export default function SearchBar({ onClose }: SearchBarProps) {
     recorderRef.current = null;
   };
 
+  // Voice or typed command: bring in the labeled emails, exactly like the Import From Inbox button.
+  const runImport = async () => {
+    setLoading(true);
+    setMessage(null);
+    setResult(null);
+    try {
+      const r = await importGmailMessages();
+      if (r.error) {
+        setMessage({ kind: 'error', text: `Import from inbox failed: ${r.error}` });
+      } else {
+        const text = `Imported ${r.imported} new document(s) from ${r.messages_found} labeled email(s). `
+          + `Already processed: ${r.already_processed}, skipped: ${r.skipped}, failed: ${r.failed}.`;
+        setMessage({ kind: r.failed > 0 ? 'error' : 'success', text });
+        window.dispatchEvent(new Event(DOCUMENTS_CHANGED));
+      }
+    } catch (err) {
+      setMessage({ kind: 'error', text: err instanceof Error ? err.message : 'Import from inbox failed.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const ask = async (text: string, selectId?: string) => {
     if (!text.trim() && !selectId) return;
+    if (!selectId && isImportCommand(text)) {
+      await runImport();
+      return;
+    }
     setLoading(true);
     setMessage(null);
     try {
@@ -68,6 +109,14 @@ export default function SearchBar({ onClose }: SearchBarProps) {
     }
   };
 
+  useEffect(() => {
+    if (initialQuery && !askedInitialRef.current) {
+      askedInitialRef.current = true;
+      ask(initialQuery);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const runTranscription = async (blob: Blob) => {
     setTranscribing(true);
     setVoiceError('');
@@ -78,6 +127,8 @@ export default function SearchBar({ onClose }: SearchBarProps) {
         setFromVoice(true);
         lastAudioRef.current = null; // transient audio is discarded once transcribed
         inputRef.current?.focus();
+        // A spoken import command runs straight away; questions still wait for Ask.
+        if (isImportCommand(response.transcript)) await runImport();
       } else {
         setVoiceError(response.error || 'Transcription failed.');
       }
@@ -147,6 +198,11 @@ export default function SearchBar({ onClose }: SearchBarProps) {
     if (!result?.answer || !window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(result.answer);
+    const voice = femaleVoice();
+    if (voice) {
+      utterance.voice = voice;
+      utterance.lang = voice.lang;
+    }
     utterance.onend = () => setSpeaking(false);
     utterance.onerror = () => setSpeaking(false);
     window.speechSynthesis.speak(utterance);
@@ -184,8 +240,8 @@ export default function SearchBar({ onClose }: SearchBarProps) {
   };
 
   return (
-    <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="card assistant" role="dialog" aria-label="Ask about a bill">
+    <div className="assistant-inline" ref={panelRef}>
+      <div className="card assistant" role="region" aria-label="Ask about a bill">
         <form onSubmit={(e) => { e.preventDefault(); ask(query); }} className="stack">
           <label htmlFor="assistant-question">Question</label>
           <input id="assistant-question" ref={inputRef} type="text" value={query}

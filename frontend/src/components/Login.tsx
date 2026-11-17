@@ -1,5 +1,6 @@
 import { useState, FormEvent } from 'react';
 import { login } from '../api';
+import { BrandMark, PRODUCT_TAGLINE, WORKSPACE_NAME } from '../brand';
 
 interface LoginProps {
   onLogin: (username: string) => void;
@@ -31,69 +32,59 @@ export default function Login({ onLogin }: LoginProps) {
   };
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '1rem',
-    }}>
-      <div className="card" style={{ width: '100%', maxWidth: '400px' }}>
-        <h1 style={{ margin: '0 0 1.5rem', textAlign: 'center', fontSize: '1.5rem' }}>
-          Morning Assistant
-        </h1>
+    <div className="login">
+      <aside className="login-hero">
+        <div className="login-brand"><BrandMark size={34} /> {WORKSPACE_NAME} · {PRODUCT_TAGLINE}</div>
+        <div>
+          <h2>Every document filed.<br />Every bill <em>accounted for.</em></h2>
+          <p>Bills, receipts, leases and statements come in by email or upload, are read and filed by property,
+            checked against QuickBooks, and wait for your approval. Nothing is ever paid without you.</p>
+        </div>
+        <div className="login-points">
+          <div><strong>Originals preserved</strong>Stored once, fingerprinted</div>
+          <div><strong>No duplicates</strong>Checked before anything is created</div>
+          <div><strong>You approve</strong>The app never moves money</div>
+        </div>
+      </aside>
 
-        <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: '1rem' }}>
-            <label htmlFor="login-username" style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 500 }}>
-              Username
-            </label>
-            <input
-              id="login-username"
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              autoFocus
-              autoComplete="username"
-            />
-          </div>
+      <div className="login-panel">
+        <div className="login-card">
+          <h1>Morning Assistant</h1>
+          <p className="login-lede">Sign in to start your morning review.</p>
 
-          <div style={{ marginBottom: '1rem' }}>
-            <label htmlFor="login-password" style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 500 }}>
-              Password
-            </label>
-            <input
-              id="login-password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="current-password"
-            />
-          </div>
-
-          {error && (
-            <div role="alert" style={{
-              padding: '0.75rem',
-              marginBottom: '1rem',
-              background: '#fee2e2',
-              color: '#991b1b',
-              borderRadius: 'var(--radius)',
-            }}>
-              {error}
+          <form onSubmit={handleSubmit}>
+            <div className="field">
+              <label htmlFor="login-username">Username</label>
+              <input
+                id="login-username"
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                autoFocus
+                autoComplete="username"
+              />
             </div>
-          )}
 
-          <button
-            type="submit"
-            className="btn-primary"
-            disabled={loading}
-            style={{ width: '100%', padding: '0.75rem' }}
-          >
-            {loading ? 'Signing in...' : 'Sign in'}
-          </button>
-        </form>
+            <div className="field">
+              <label htmlFor="login-password">Password</label>
+              <input
+                id="login-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="current-password"
+              />
+            </div>
+
+            {error && <div role="alert" className="notice-error">{error}</div>}
+
+            <button type="submit" className="btn-primary" disabled={loading}>
+              {loading ? 'Signing in...' : 'Sign in'}
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );

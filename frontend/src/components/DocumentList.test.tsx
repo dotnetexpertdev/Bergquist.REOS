@@ -1,11 +1,11 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../api', () => ({
   getDocuments: vi.fn(), getNeedsReview: vi.fn(), getGmailStatus: vi.fn(), importGmailMessages: vi.fn(),
-  uploadDocument: vi.fn(),
+  uploadDocument: vi.fn(), DOCUMENTS_CHANGED: 'documents-changed',
 }));
 
 import * as api from '../api';
@@ -49,13 +49,29 @@ describe('DocumentList', () => {
     expect(await screen.findByRole('link', { name: 'Open document' })).toHaveAttribute('href', '/documents/d7');
   });
 
-  it('imports demo emails and shows counts with a retry for failures', async () => {
+  it('uploads every file dropped on the drop area, one after another', async () => {
+    m.uploadDocument.mockResolvedValueOnce({ success: true, document_id: 'd8', message: 'Document uploaded.' })
+      .mockResolvedValueOnce({ success: true, document_id: 'd9', message: 'Document uploaded.' });
+    renderList();
+    const zone = await screen.findByLabelText('Drop files here');
+    const files = [new File(['%PDF-1.4 a'], 'a.pdf', { type: 'application/pdf' }),
+      new File(['%PDF-1.4 b'], 'b.pdf', { type: 'application/pdf' })];
+    fireEvent.dragOver(zone, { dataTransfer: { files } });
+    expect(zone).toHaveTextContent('Release to upload');
+    fireEvent.drop(zone, { dataTransfer: { files } });
+    expect(await screen.findByText(/2 files received/)).toBeInTheDocument();
+    expect(m.uploadDocument.mock.calls.map((c) => c[0].name)).toEqual(['a.pdf', 'b.pdf']);
+    expect(m.uploadDocument.mock.calls[0][1]).not.toBe(m.uploadDocument.mock.calls[1][1]); // separate attempt IDs
+    expect(screen.getByRole('link', { name: 'Open document' })).toHaveAttribute('href', '/documents/d9');
+  });
+
+  it('imports from the inbox and shows counts with a retry for failures', async () => {
     const user = userEvent.setup();
     m.importGmailMessages.mockResolvedValue({ success: false, messages_found: 2, attachments_processed: 2, imported: 1,
       already_processed: 0, skipped: 0, failed: 1, results: [
         { message_id: 'm2', attachment_filename: 'b.pdf', success: false, is_duplicate: false, error: 'Temporary Gmail error' }] });
     renderList();
-    await user.click(await screen.findByRole('button', { name: 'Import demo emails' }));
+    await user.click(await screen.findByRole('button', { name: 'Import From Inbox' }));
     const results = await screen.findByRole('status', { name: 'Import results' });
     expect(results).toHaveTextContent('Imported: 1');
     expect(results).toHaveTextContent('b.pdf: Temporary Gmail error');

@@ -49,9 +49,9 @@ test('email import, approval, phone re-upload, history answer, unclear property,
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 
   // --- Import the labeled vendor email (twice: second is a no-op) ---------
-  await page.getByRole('button', { name: 'Import demo emails' }).click();
+  await page.getByRole('button', { name: 'Import From Inbox' }).click();
   await expect(page.getByRole('status', { name: 'Import results' })).toContainText('Imported: 1');
-  await page.getByRole('button', { name: 'Import demo emails' }).click();
+  await page.getByRole('button', { name: 'Import From Inbox' }).click();
   await expect(page.getByRole('status', { name: 'Import results' })).toContainText('already processed: 1');
   const documents = page.getByRole('list', { name: 'Documents' });
   await expect(documents.getByRole('link')).toHaveCount(1);
@@ -117,7 +117,7 @@ test('email import, approval, phone re-upload, history answer, unclear property,
 
   // --- Ask what happened, and verify against the saved history -------------
   await page.getByRole('button', { name: 'Ask about a bill' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Ask about a bill' });
+  const dialog = page.getByRole('region', { name: 'Ask about a bill' }); // a panel on the page, not a modal
   await dialog.getByLabel('Question').fill('What happened to the electricity bill?');
   await dialog.getByRole('button', { name: 'Ask' }).click();
   const answer = dialog.getByRole('region', { name: 'Answer' });

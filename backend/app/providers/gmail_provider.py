@@ -143,7 +143,7 @@ async def get_label_id(access_token: str, label_name: str) -> Tuple[Optional[str
             return None, (
                 f"Gmail label '{label_name}' was not found. In Gmail, choose 'Create new label' "
                 f"in the left sidebar, name it exactly '{label_name}', apply it to the vendor's "
-                "email, then click Import demo emails again."
+                "email, then click Import From Inbox again."
             )
         except Exception as e:
             return None, f"Label lookup error: {str(e)}"

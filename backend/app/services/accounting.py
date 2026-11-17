@@ -242,6 +242,45 @@ async def run_duplicate_check(db: AsyncSession, document_id: str, client, actor:
             "dismissed_still_present": dismissed_seen}
 
 
+AUTO_CHECK_STATUSES = (DocumentStatus.NEEDS_REVIEW, DocumentStatus.READY_FOR_APPROVAL,
+                       DocumentStatus.DUPLICATE_CANDIDATE)
+
+
+async def auto_duplicate_check(db: AsyncSession, document_id: str, actor: str = "system") -> Optional[Dict[str, Any]]:
+    """Look for an existing QuickBooks bill as soon as the vendor and invoice number are known.
+
+    Runs after a bill is read and after a correction that changes the facts being compared, so a
+    bill that is already in QuickBooks goes straight to the review queue instead of showing as
+    ready. Read-only in QuickBooks and never raises: intake and saving a correction must not fail
+    because QuickBooks is unavailable. A check that could not run is recorded on the document so
+    the owner is asked to retry; approval always repeats the check before posting.
+    """
+    try:
+        doc = await _reload(db, document_id)
+    except AccountingError:
+        return None
+    eligible = (doc.is_bill and doc.status in AUTO_CHECK_STATUSES and bool(doc.qb_vendor_id)
+                and bool(doc.effective_invoice_number))
+    verified = eligible and (await company_status(db))["verified"]
+    await db.commit()
+    if not verified:
+        return None  # nothing to compare yet, or no verified company to compare against
+    try:
+        client, _company = await open_verified_company(db)
+    except AccountingError as e:
+        doc = await _reload(db, document_id)
+        doc.last_accounting_check_at = datetime.utcnow()
+        doc.last_accounting_check_ok = False
+        doc.last_accounting_check_error = e.message
+        _event(db, doc.id, EventType.ACCOUNTING_CHECK_FAILED, actor, error=e.message, purpose="automatic")
+        await db.commit()
+        return None
+    try:
+        return await run_duplicate_check(db, document_id, client, actor)
+    except AccountingError:
+        return None  # run_duplicate_check has already recorded the failed lookup
+
+
 async def resolve_candidate(db: AsyncSession, document_id: str, candidate_id: str, resolution: str,
                             reason: Optional[str], actor: str) -> Document:
     doc = await _reload(db, document_id)

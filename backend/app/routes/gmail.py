@@ -1,4 +1,4 @@
-"""Gmail routes: read-only OAuth connection and 'Import demo emails'.
+"""Gmail routes: read-only OAuth connection and 'Import From Inbox'.
 
 The OAuth callback handler is registered at GMAIL_CALLBACK_ROUTE
 (/api/gmail/callback). If GMAIL_OAUTH_CALLBACK names a different path, app.main
